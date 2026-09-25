@@ -171,7 +171,7 @@ class DeckSyncForegroundService : Service() {
                 serviceType = DeckSyncSettings.MDNS_SERVICE_TYPE
                 setPort(port)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    setAttribute("version", "1.10.0")
+                    setAttribute("version", com.example.japanesegrammarapp.BuildConfig.VERSION_NAME)
                     setAttribute("app", "YomiLLM")
                 }
             }

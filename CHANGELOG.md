@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-09-25
+
+### Fixed
+- Fixed vertical Japanese reading order inversion when selecting cross-column text (`縦書き跨列`):
+  - Intelligent slice recomposition (`createRecomposedBitmap`): cross-column selections (<= 2 columns) are sequentially stitched into a single vertical strip, eliminating multiline diagonal gaps and preventing vision LLMs from misinterpreting reading direction as left-to-right.
+  - Multi-column selections (>= 3 columns) are top-aligned and ordered right-to-left following standard Japanese typesetting.
+- Fixed text selection handle dragging UX in camera crop review:
+  - Enhanced pointer input dispatch with nested scroll consumption to prevent unintentional dragging of underlying zoom/pan layer.
+  - Added dedicated touch hit-target expansion for start/end handles with precise image-space coordinate mapping.
+  - Constrained handle drag gestures strictly within image bounds to eliminate viewport drift.
+
+### Changed
+- Refactored service and server version reporting in `DeckSyncForegroundService` and `DeckSyncServer` to dynamically reference `BuildConfig.VERSION_NAME`.
+
 ## [1.10.0] - 2026-08-25
 
 ### Added
@@ -314,6 +328,7 @@ This release should make grammar analysis more stable for sentences containing e
 ### Added
 - Initial stable release featuring Japanese grammar analysis using Kuromoji tokenizer and custom LLM prompts.
 
+[1.10.1]: https://github.com/m1kuk1m/YomiLLM/releases/tag/v1.10.1
 [1.10.0]: https://github.com/m1kuk1m/YomiLLM/releases/tag/v1.10.0
 [1.9.2]: https://github.com/m1kuk1m/YomiLLM/releases/tag/v1.9.2
 [1.9.1]: https://github.com/m1kuk1m/YomiLLM/releases/tag/v1.9.1

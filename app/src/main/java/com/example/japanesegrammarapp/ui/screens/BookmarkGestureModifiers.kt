@@ -66,9 +66,10 @@ class CollapsingFilterState(
 @Composable
 fun rememberCollapsingFilterState(
     lazyListState: LazyListState,
-    thresholdPx: Float = 15f
+    thresholdPx: Float = 15f,
+    key: String? = null
 ): CollapsingFilterState {
-    var isScrolledVisible by rememberSaveable { mutableStateOf(true) }
+    var isScrolledVisible by rememberSaveable(key = key) { mutableStateOf(true) }
     val isAtTop by remember {
         derivedStateOf {
             lazyListState.firstVisibleItemIndex == 0 && lazyListState.firstVisibleItemScrollOffset <= 10

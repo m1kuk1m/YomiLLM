@@ -109,23 +109,28 @@ class BookmarkViewModel @Inject constructor(
     private val _isLoaded = MutableStateFlow(false)
     val isLoaded: StateFlow<Boolean> = _isLoaded.asStateFlow()
 
+    private val SubscribedKeepCache = SharingStarted.WhileSubscribed(
+        stopTimeoutMillis = 5000,
+        replayExpirationMillis = Long.MAX_VALUE
+    )
+
     val allBookmarks: StateFlow<List<BookmarkedSegmentDomain>> =
         bookmarkRepository.allBookmarks
             .onEach { _isLoaded.value = true }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            .stateIn(viewModelScope, SubscribedKeepCache, emptyList())
 
     /** Expose only active (non-archived) bookmarks for flashcard and main list */
     val activeBookmarks: StateFlow<List<BookmarkedSegmentDomain>> = allBookmarks
         .map { list -> list.filter { !it.isArchived } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SubscribedKeepCache, emptyList())
 
     val bookmarkedSentences: StateFlow<List<BookmarkedSentenceDomain>> =
         bookmarkRepository.allBookmarkedSentences
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            .stateIn(viewModelScope, SubscribedKeepCache, emptyList())
 
     val grammarPoints: StateFlow<List<BookmarkedGrammarPointDomain>> =
         bookmarkRepository.getAllGrammarPoints()
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            .stateIn(viewModelScope, SubscribedKeepCache, emptyList())
 
     fun removeSentenceBookmark(id: Int) {
         viewModelScope.launch {
@@ -151,17 +156,17 @@ class BookmarkViewModel @Inject constructor(
     val filterState: StateFlow<BookmarkFilterState> = wordFilterState
     val filterMode: StateFlow<BookmarkFilter> = wordFilterState
         .map { it.mode }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BookmarkFilter.ALL)
+        .stateIn(viewModelScope, SubscribedKeepCache, BookmarkFilter.ALL)
 
     /** Currently selected POS category filter — only used when filterMode == BY_POS */
     val selectedPosCategory: StateFlow<String?> = wordFilterState
         .map { it.selectedPosCategory }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+        .stateIn(viewModelScope, SubscribedKeepCache, null)
 
     /** Currently selected date sub-filter — only used when filterMode == BY_DATE */
     val selectedDateFilter: StateFlow<Long?> = wordFilterState
         .map { it.selectedDateFilter }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+        .stateIn(viewModelScope, SubscribedKeepCache, null)
 
     /** Available POS categories derived from all bookmarks */
     val posCategories: StateFlow<List<String>> = allBookmarks
@@ -170,19 +175,19 @@ class BookmarkViewModel @Inject constructor(
                 .distinct()
                 .sorted()
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SubscribedKeepCache, emptyList())
 
     val wordDateCategories: StateFlow<Set<Long>> = allBookmarks
         .map { bookmarks -> bookmarkDateCategories(bookmarks.map { it.bookmarkedAt }) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+        .stateIn(viewModelScope, SubscribedKeepCache, emptySet())
 
     val sentenceDateCategories: StateFlow<Set<Long>> = bookmarkedSentences
         .map { sentences -> bookmarkDateCategories(sentences.map { it.bookmarkedAt }) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+        .stateIn(viewModelScope, SubscribedKeepCache, emptySet())
 
     val grammarDateCategories: StateFlow<Set<Long>> = grammarPoints
         .map { points -> bookmarkDateCategories(points.map { it.bookmarkedAt }) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+        .stateIn(viewModelScope, SubscribedKeepCache, emptySet())
 
     // Existing callers use these as the word-tab categories.
     val dateCategories: StateFlow<Set<Long>> = wordDateCategories
@@ -191,45 +196,45 @@ class BookmarkViewModel @Inject constructor(
 
     val archiveFilter: StateFlow<ArchiveFilter> = wordFilterState
         .map { it.archiveFilter }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ArchiveFilter.ALL)
+        .stateIn(viewModelScope, SubscribedKeepCache, ArchiveFilter.ALL)
     val searchQuery: StateFlow<String> = wordFilterState
         .map { it.searchQuery }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+        .stateIn(viewModelScope, SubscribedKeepCache, "")
     val sortOrder: StateFlow<BookmarkSortOrder> = wordFilterState
         .map { it.sortOrder }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BookmarkSortOrder.NEWEST_FIRST)
+        .stateIn(viewModelScope, SubscribedKeepCache, BookmarkSortOrder.NEWEST_FIRST)
 
     val sentenceFilterMode: StateFlow<BookmarkFilter> = sentenceFilterState
         .map { it.mode }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BookmarkFilter.ALL)
+        .stateIn(viewModelScope, SubscribedKeepCache, BookmarkFilter.ALL)
     val sentenceSelectedDateFilter: StateFlow<Long?> = sentenceFilterState
         .map { it.selectedDateFilter }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+        .stateIn(viewModelScope, SubscribedKeepCache, null)
     val sentenceArchiveFilter: StateFlow<ArchiveFilter> = sentenceFilterState
         .map { it.archiveFilter }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ArchiveFilter.ALL)
+        .stateIn(viewModelScope, SubscribedKeepCache, ArchiveFilter.ALL)
     val sentenceSearchQuery: StateFlow<String> = sentenceFilterState
         .map { it.searchQuery }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+        .stateIn(viewModelScope, SubscribedKeepCache, "")
     val sentenceSortOrder: StateFlow<BookmarkSortOrder> = sentenceFilterState
         .map { it.sortOrder }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BookmarkSortOrder.NEWEST_FIRST)
+        .stateIn(viewModelScope, SubscribedKeepCache, BookmarkSortOrder.NEWEST_FIRST)
 
     val grammarFilterMode: StateFlow<BookmarkFilter> = grammarFilterState
         .map { it.mode }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BookmarkFilter.ALL)
+        .stateIn(viewModelScope, SubscribedKeepCache, BookmarkFilter.ALL)
     val grammarSelectedDateFilter: StateFlow<Long?> = grammarFilterState
         .map { it.selectedDateFilter }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+        .stateIn(viewModelScope, SubscribedKeepCache, null)
     val grammarArchiveFilter: StateFlow<ArchiveFilter> = grammarFilterState
         .map { it.archiveFilter }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ArchiveFilter.ALL)
+        .stateIn(viewModelScope, SubscribedKeepCache, ArchiveFilter.ALL)
     val grammarSearchQuery: StateFlow<String> = grammarFilterState
         .map { it.searchQuery }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+        .stateIn(viewModelScope, SubscribedKeepCache, "")
     val grammarSortOrder: StateFlow<BookmarkSortOrder> = grammarFilterState
         .map { it.sortOrder }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BookmarkSortOrder.NEWEST_FIRST)
+        .stateIn(viewModelScope, SubscribedKeepCache, BookmarkSortOrder.NEWEST_FIRST)
 
     fun setArchiveFilter(filter: ArchiveFilter) {
         setArchiveFilter(BookmarkTab.WORDS, filter)
@@ -263,7 +268,7 @@ class BookmarkViewModel @Inject constructor(
                 )
             }
             .sortedBy(filter.sortOrder) { it.bookmarkedAt }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SubscribedKeepCache, emptyList())
 
     val filteredSentences: StateFlow<List<BookmarkedSentenceDomain>> = combine(
         bookmarkedSentences,
@@ -276,7 +281,7 @@ class BookmarkViewModel @Inject constructor(
                 listOf(originalText, translation, modelUsed)
             }
             .sortedBy(filter.sortOrder) { it.bookmarkedAt }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SubscribedKeepCache, emptyList())
 
     val filteredGrammarPoints: StateFlow<List<BookmarkedGrammarPointDomain>> = combine(
         grammarPoints,
@@ -289,7 +294,7 @@ class BookmarkViewModel @Inject constructor(
                 listOf(pattern, explanation, sourceText)
             }
             .sortedBy(filter.sortOrder) { it.bookmarkedAt }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SubscribedKeepCache, emptyList())
 
     fun setFilterMode(mode: BookmarkFilter) {
         setFilterMode(BookmarkTab.WORDS, mode)

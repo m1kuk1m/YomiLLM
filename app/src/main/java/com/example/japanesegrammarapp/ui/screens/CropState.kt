@@ -142,6 +142,10 @@ class CropState(
             }
         }
 
+        if (bestHandle == DragHandle.NONE && x in cropLeft..cropRight && y in cropTop..cropBottom) {
+            bestHandle = DragHandle.CENTER
+        }
+
         activeHandle = bestHandle
     }
 

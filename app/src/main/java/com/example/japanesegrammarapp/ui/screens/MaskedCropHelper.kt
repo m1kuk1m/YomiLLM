@@ -7,6 +7,54 @@ import android.graphics.Rect
 
 object MaskedCropHelper {
 
+    /**
+     * Recomposes text selection boxes according to natural reading order:
+     * - Vertical text <= 2 columns: sequential single vertical strip (top to bottom)
+     * - Vertical text >= 3 columns: multi-column right-to-left top-aligned
+     * - Horizontal text: rows left-aligned top to bottom
+     */
+    fun createRecomposedBitmap(
+        originalBitmap: Bitmap,
+        selectedBoxes: List<Rect>,
+        padding: Int = 20,
+        gap: Int = 12
+    ): Bitmap {
+        if (selectedBoxes.isEmpty()) {
+            val emptyBitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+            emptyBitmap.eraseColor(Color.WHITE)
+            return emptyBitmap
+        }
+
+        val plan = planRecompositionForAndroidRects(selectedBoxes, padding, gap)
+        val width = plan.targetWidth.coerceAtLeast(1)
+        val height = plan.targetHeight.coerceAtLeast(1)
+        val config = originalBitmap.config ?: Bitmap.Config.ARGB_8888
+        val resultBitmap = Bitmap.createBitmap(width, height, config)
+        resultBitmap.eraseColor(Color.WHITE)
+
+        val canvas = Canvas(resultBitmap)
+        for (placement in plan.placements) {
+            val src = placement.srcRect
+            val dst = placement.dstRect
+
+            val left = src.left.coerceIn(0, originalBitmap.width)
+            val top = src.top.coerceIn(0, originalBitmap.height)
+            val right = src.right.coerceIn(0, originalBitmap.width)
+            val bottom = src.bottom.coerceIn(0, originalBitmap.height)
+
+            if (left >= right || top >= bottom) continue
+
+            val srcRect = Rect(left, top, right, bottom)
+            val dstRect = Rect(dst.left, dst.top, dst.right, dst.bottom)
+            canvas.drawBitmap(originalBitmap, srcRect, dstRect, null)
+        }
+
+        return resultBitmap
+    }
+
+    /**
+     * Legacy masked crop retaining original absolute 2D positions on a white background.
+     */
     fun createMaskedBitmap(originalBitmap: Bitmap, selectedBoxes: List<Rect>): Bitmap {
         if (selectedBoxes.isEmpty()) {
             val emptyBitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)

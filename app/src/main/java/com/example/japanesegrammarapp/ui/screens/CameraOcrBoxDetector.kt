@@ -142,7 +142,7 @@ suspend fun detectFineGrainedCameraOcrBoxes(
     context: Context? = null
 ): List<Rect> {
     val normalizedSettings = settings.normalized()
-    return when (normalizedSettings.textSelectEngine) {
+    val rawBoxes = when (normalizedSettings.textSelectEngine) {
         OcrBoxDetectorEngine.ML_KIT -> detectMlKitFineGrainedCameraOcrBoxes(bitmap)
         else -> {
             detectRapidOcrRawCameraBoxes(
@@ -152,6 +152,7 @@ suspend fun detectFineGrainedCameraOcrBoxes(
             )
         }
     }
+    return sortOcrBoxesForTextSelect(rawBoxes)
 }
 
 private suspend fun detectMlKitFineGrainedCameraOcrBoxes(

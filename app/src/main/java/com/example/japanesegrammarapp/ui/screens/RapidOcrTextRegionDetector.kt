@@ -311,12 +311,25 @@ fun mergeRapidOcrFinalBoxes(
     val filtered = filterRapidOcrNoise(boxes, bitmapWidth, bitmapHeight)
         .map { rect -> RapidOcrCandidate(rect = rect, direction = rapidOcrDirection(rect)) }
 
-    val columnMerged = mergeRapidOcrCandidates(
+    // Phase 1: Merge intra-line/intra-column fragments into cohesive lines/columns
+    val lineMerged = mergeRapidOcrCandidates(
         candidates = filtered,
-        shouldMerge = ::shouldMergeSameVerticalColumn
+        shouldMerge = { first, second ->
+            shouldMergeSameVerticalColumn(first, second) || shouldMergeSameHorizontalRow(first, second)
+        }
     )
+
+    // Phase 2: Merge adjacent columns into vertical paragraphs, and adjacent rows into horizontal paragraphs
+    val paragraphMerged = mergeRapidOcrCandidates(
+        candidates = lineMerged,
+        shouldMerge = { first, second ->
+            shouldMergeVerticalColumns(first, second, settings) || shouldMergeHorizontalRows(first, second, settings)
+        }
+    )
+
+    // Phase 3: Merge overlapping candidates
     val overlapMerged = mergeRapidOcrCandidates(
-        candidates = columnMerged,
+        candidates = paragraphMerged,
         shouldMerge = { first, second -> shouldMergeOverlappingRapidBoxes(first.rect, second.rect) }
     )
 
@@ -401,6 +414,91 @@ private fun shouldMergeSameVerticalColumn(
         compactColumn
 }
 
+private fun shouldMergeSameHorizontalRow(
+    first: RapidOcrCandidate,
+    second: RapidOcrCandidate
+): Boolean {
+    if (!first.isHorizontalLike() || !second.isHorizontalLike()) return false
+    val a = first.rect
+    val b = second.rect
+    val medianHeight = ((a.height() + b.height()) / 2f).coerceAtLeast(1f)
+    val centerDistanceY = kotlin.math.abs(a.centerY() - b.centerY())
+    val gapX = rapidGapX(a, b)
+    val yOverlap = rapidOverlapRatio(a.top, a.bottom, b.top, b.bottom)
+    val union = rapidUnionRects(a, b)
+    val compactRow = union.width() >= union.height() * 1.75f
+    val similarHeight = maxOf(a.height(), b.height()).toFloat() /
+        minOf(a.height(), b.height()).coerceAtLeast(1) <= 2.1f
+    val notSeparatedByLargeGap = gapX <= maxOf(medianHeight * 3.0f, minOf(a.width(), b.width()) * 0.85f)
+
+    return centerDistanceY <= medianHeight * 0.65f &&
+        yOverlap >= 0.52f &&
+        similarHeight &&
+        notSeparatedByLargeGap &&
+        compactRow
+}
+
+private fun shouldMergeVerticalColumns(
+    first: RapidOcrCandidate,
+    second: RapidOcrCandidate,
+    settings: OcrBoxDetectionSettings
+): Boolean {
+    if (!first.isVerticalLike() || !second.isVerticalLike()) return false
+    val a = first.rect
+    val b = second.rect
+    val medianWidth = ((a.width() + b.width()) / 2f).coerceAtLeast(1f)
+    val gapX = rapidGapX(a, b)
+    val gapY = rapidGapY(a, b)
+    val yOverlap = rapidOverlapRatio(a.top, a.bottom, b.top, b.bottom)
+    val xOverlap = rapidOverlapRatio(a.left, a.right, b.left, b.right)
+    val union = rapidUnionRects(a, b)
+    val centerYDistance = kotlin.math.abs(a.centerY() - b.centerY())
+    val heightRatio = maxOf(a.height(), b.height()).toFloat() /
+        minOf(a.height(), b.height()).coerceAtLeast(1).toFloat()
+    val minWidth = minOf(a.width(), b.width()).coerceAtLeast(1)
+    val unionArea = (union.width().toLong() * union.height().toLong()).coerceAtLeast(1L).toFloat()
+    val fillRatio = (a.width().toLong() * a.height().toLong() + b.width().toLong() * b.height().toLong()).toFloat() / unionArea
+
+    val closeColumns = gapX <= maxOf(medianWidth * settings.verticalColumnGapMultiplier, minWidth * 0.55f, 24f) ||
+        xOverlap >= settings.verticalXOverlapThreshold
+    val sameVerticalBand = yOverlap >= 0.45f ||
+        (centerYDistance <= union.height() * 0.30f && gapY <= medianWidth * 2.6f)
+    val comparableHeight = heightRatio <= 3.0f
+    val compactUnion = fillRatio >= settings.verticalFillRatioMin
+
+    return closeColumns && sameVerticalBand && comparableHeight && compactUnion
+}
+
+private fun shouldMergeHorizontalRows(
+    first: RapidOcrCandidate,
+    second: RapidOcrCandidate,
+    settings: OcrBoxDetectionSettings
+): Boolean {
+    if (!first.isHorizontalLike() || !second.isHorizontalLike()) return false
+    val a = first.rect
+    val b = second.rect
+    val medianHeight = ((a.height() + b.height()) / 2f).coerceAtLeast(1f)
+    val gapY = rapidGapY(a, b)
+    val gapX = rapidGapX(a, b)
+    val xOverlap = rapidOverlapRatio(a.left, a.right, b.left, b.right)
+    val yOverlap = rapidOverlapRatio(a.top, a.bottom, b.top, b.bottom)
+    val union = rapidUnionRects(a, b)
+    val widthRatio = maxOf(a.width(), b.width()).toFloat() /
+        minOf(a.width(), b.width()).coerceAtLeast(1).toFloat()
+    val minHeight = minOf(a.height(), b.height()).coerceAtLeast(1)
+    val unionArea = (union.width().toLong() * union.height().toLong()).coerceAtLeast(1L).toFloat()
+    val fillRatio = (a.width().toLong() * a.height().toLong() + b.width().toLong() * b.height().toLong()).toFloat() / unionArea
+
+    val closeRows = gapY <= maxOf(medianHeight * settings.horizontalRowGapMultiplier, minHeight * 0.50f, 20f) ||
+        yOverlap >= 0.36f
+    val sameHorizontalBand = xOverlap >= settings.horizontalXOverlapThreshold ||
+        (gapX <= medianHeight * 1.5f && yOverlap >= 0.20f)
+    val comparableWidth = widthRatio <= 3.0f
+    val compactUnion = fillRatio >= settings.horizontalFillRatioMin
+
+    return closeRows && sameHorizontalBand && comparableWidth && compactUnion
+}
+
 private fun shouldMergeOverlappingRapidBoxes(a: Rect, b: Rect): Boolean {
     val containment = maxOf(rapidContainmentRatio(a, b), rapidContainmentRatio(b, a))
     if (containment >= 0.82f) return true
@@ -470,6 +568,11 @@ private fun RapidOcrCandidate.isVerticalLike(): Boolean {
         (direction == RapidOcrDirection.MIXED && rect.height() >= rect.width())
 }
 
+private fun RapidOcrCandidate.isHorizontalLike(): Boolean {
+    return direction == RapidOcrDirection.HORIZONTAL ||
+        (direction == RapidOcrDirection.MIXED && rect.width() >= rect.height())
+}
+
 private fun rapidMergedDirection(
     first: RapidOcrCandidate,
     second: RapidOcrCandidate,
@@ -478,6 +581,7 @@ private fun rapidMergedDirection(
     return when {
         first.direction == second.direction -> first.direction
         first.isVerticalLike() && second.isVerticalLike() -> RapidOcrDirection.VERTICAL
+        first.isHorizontalLike() && second.isHorizontalLike() -> RapidOcrDirection.HORIZONTAL
         else -> rapidOcrDirection(rect)
     }
 }

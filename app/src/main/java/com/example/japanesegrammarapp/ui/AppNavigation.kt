@@ -634,26 +634,33 @@ fun AppNavigation(externalTextFlow: Flow<String> = emptyFlow(), intentFlow: Flow
             }
         }
         composable(
-            route = "camera?imageUri={imageUri}",
+            route = "camera?imageUri={imageUri}&cameraMode={cameraMode}",
             arguments = listOf(
                 androidx.navigation.navArgument("imageUri") {
                     type = androidx.navigation.NavType.StringType
                     nullable = true
                     defaultValue = null
+                },
+                androidx.navigation.navArgument("cameraMode") {
+                    type = androidx.navigation.NavType.StringType
+                    defaultValue = "direct_analysis"
                 }
             )
         ) { backStackEntry ->
             val galleryImageUriString = backStackEntry.arguments?.getString("imageUri")
+            val cameraMode = backStackEntry.arguments?.getString("cameraMode") ?: "direct_analysis"
             val settingsViewModel: SettingsViewModel = hiltViewModel()
             val cameraViewModel: CameraViewModel = hiltViewModel()
             val settingsUiState by settingsViewModel.uiState.collectAsState()
             CameraScreen(
                 navController = navController,
                 galleryImageUriString = galleryImageUriString,
+                cameraMode = cameraMode,
                 ocrBoxDetectionSettings = settingsUiState.ocrBoxDetectionSettings,
                 autoDeskewAfterCapture = settingsUiState.autoDeskewAfterCapture,
                 settingsLoaded = settingsUiState.isSettingsLoaded,
-                uiPreferencesRepository = cameraViewModel.uiPreferencesRepository
+                uiPreferencesRepository = cameraViewModel.uiPreferencesRepository,
+                cameraViewModel = cameraViewModel
             )
         }
 

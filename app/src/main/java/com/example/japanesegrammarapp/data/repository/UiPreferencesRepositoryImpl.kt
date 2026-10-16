@@ -43,11 +43,19 @@ class UiPreferencesRepositoryImpl @Inject constructor(
         prefs.edit().putString(KEY_CROP_INTERACTION, mode).apply()
     }
 
+    override fun getWorkspaceMediaButtonOrder(defaultValue: String): String =
+        prefs.getString(KEY_WORKSPACE_MEDIA_BUTTON_ORDER, defaultValue) ?: defaultValue
+
+    override fun saveWorkspaceMediaButtonOrder(order: String) {
+        prefs.edit().putString(KEY_WORKSPACE_MEDIA_BUTTON_ORDER, order).apply()
+    }
+
     private companion object {
         const val KEY_FAB_X = "fab_x"
         const val KEY_FAB_Y = "fab_y"
         const val KEY_FAB_MODE = "fab_mode"
         const val KEY_LAST_DICTIONARY = "last_dict"
         const val KEY_CROP_INTERACTION = "crop_interaction"
+        const val KEY_WORKSPACE_MEDIA_BUTTON_ORDER = "workspace_media_button_order"
     }
 }

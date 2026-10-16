@@ -13,6 +13,7 @@ object ZenColors {
     val AizomeIndigo = Color(0xFFBCCCD4)     // 蓝染色 (Soft slate blue)
     val KuriAmber = Color(0xFFECCEB1)        // 栗色 (Soft amber/chestnut)
     val HaiMist = Color(0xFFE5E4E2)          // 雾灰色 (Soft grey)
+    val FujiMauve = Color(0xFFE0CEE3)        // 薄葡萄/灰紫色 (Soft wisteria mauve)
 }
 
 object ZenThemeColors {
@@ -31,7 +32,7 @@ object ZenThemeColors {
         "PRE_NOUN_ADJECTIVAL" to Color(0xFFECEFC9),
         "INTERJECTION" to Color(0xFFFCE1D4),
         "SYMBOL" to Color(0xFFEAEAEA),
-        "AFFIX" to Color(0xFFE5E4E2),
+        "AFFIX" to Color(0xFFE0CEE3),
         "PHRASE" to Color(0xFFECCEB1)
     )
 
@@ -47,7 +48,7 @@ object ZenThemeColors {
         "PRE_NOUN_ADJECTIVAL" to Color(0xFF323D1E),
         "INTERJECTION" to Color(0xFF3D2A22),
         "SYMBOL" to Color(0xFF232323),
-        "AFFIX" to Color(0xFF2F3131),
+        "AFFIX" to Color(0xFF36223B),
         "PHRASE" to Color(0xFF3D2A1E)
     )
 

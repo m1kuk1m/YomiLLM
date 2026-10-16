@@ -633,14 +633,4 @@ fun SettingsDeckSyncSection(
     }
 }
 
-@Composable
-private fun SettingsDivider(horizontalPadding: androidx.compose.ui.unit.Dp = 16.dp) {
-    val SumiInk = MaterialTheme.colorScheme.onBackground
-    Divider(
-        color = SumiInk.copy(alpha = 0.08f),
-        thickness = 0.5.dp,
-        modifier = Modifier.padding(horizontal = horizontalPadding)
-    )
-}
-
 

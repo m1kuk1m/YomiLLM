@@ -12,6 +12,13 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
@@ -41,11 +48,49 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.zIndex
 import com.example.japanesegrammarapp.R
-
 import com.example.japanesegrammarapp.domain.model.AnalysisStatus
+import com.example.japanesegrammarapp.domain.repository.UiPreferencesRepository
 import com.example.japanesegrammarapp.ui.WorkspaceUiState
+import com.example.japanesegrammarapp.ui.theme.ZenColors
 import com.example.japanesegrammarapp.ui.theme.ZenThemeColors
+import kotlin.math.roundToInt
+
+enum class WorkspaceMediaAction {
+    PHOTO_INPUT,
+    CAMERA,
+    ALBUM;
+
+    companion object {
+        val DEFAULT_ORDER = listOf(PHOTO_INPUT, CAMERA, ALBUM)
+
+        fun parseOrder(raw: String?): List<WorkspaceMediaAction> {
+            if (raw.isNullOrBlank()) return DEFAULT_ORDER
+            val parsed = raw.split(",")
+                .mapNotNull { token ->
+                    entries.firstOrNull { it.name.equals(token.trim(), ignoreCase = true) }
+                }
+                .distinct()
+            if (parsed.size == entries.size) return parsed
+            val remaining = entries.filter { it !in parsed }
+            return parsed + remaining
+        }
+
+        fun serializeOrder(order: List<WorkspaceMediaAction>): String {
+            return order.joinToString(",") { it.name }
+        }
+    }
+}
 
 @Composable
 fun WorkspaceInputForm(
@@ -58,8 +103,13 @@ fun WorkspaceInputForm(
     onStartAnalysis: (String, Uri?) -> Unit,
     onCancelAnalysis: () -> Unit,
     onNavigateToCamera: () -> Unit,
+    onNavigateToPhotoInputCamera: () -> Unit = {},
+    photoInputStatus: com.example.japanesegrammarapp.domain.usecase.PhotoInputUiStatus = com.example.japanesegrammarapp.domain.usecase.PhotoInputUiStatus(),
+    onSkipPhotoInput: () -> Unit = {},
+    onCancelPhotoInput: () -> Unit = {},
     onPickImage: (Uri) -> Unit,
-    onNavigateToSettings: () -> Unit
+    onNavigateToSettings: () -> Unit,
+    uiPreferencesRepository: UiPreferencesRepository? = null
 ) {
     val SumiInk = MaterialTheme.colorScheme.onBackground
     val PrimaryColor = MaterialTheme.colorScheme.primary
@@ -104,16 +154,20 @@ fun WorkspaceInputForm(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .animateContentSize(animationSpec = spring(
-                dampingRatio = Spring.DampingRatioNoBouncy,
-                stiffness = Spring.StiffnessLow
-            ))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { focusManager.clearFocus() } // Clear focus when clicking outside
     ) {
-        // Model Pill Selector
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .animateContentSize(animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessLow
+                ))
+        ) {
+            // Model Pill Selector
         Box {
             Surface(
                 color = ZenThemeColors.pillBg(),
@@ -167,6 +221,83 @@ fun WorkspaceInputForm(
                             onNavigateToSettings()
                         }
                     )
+                }
+            }
+        }
+
+        // Photo Input Status Pill
+        AnimatedVisibility(
+            visible = photoInputStatus.isRunning && (photoInputStatus.totalTasks > 0 || photoInputStatus.isTyping),
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Surface(
+                color = ZenThemeColors.pillBg(),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f, fill = false)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = PrimaryColor
+                        )
+                        val statusText = if (photoInputStatus.isTyping) {
+                            stringResource(R.string.photo_input_status_typing)
+                        } else {
+                            stringResource(
+                                R.string.photo_input_status_recognizing,
+                                photoInputStatus.currentTaskIndex,
+                                photoInputStatus.totalTasks
+                            )
+                        }
+                        Text(
+                            text = statusText,
+                            fontSize = 12.sp,
+                            color = SumiInk.copy(alpha = 0.8f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (!photoInputStatus.isSkipped && photoInputStatus.isTyping) {
+                            TextButton(
+                                onClick = onSkipPhotoInput,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.photo_input_skip),
+                                    fontSize = 12.sp,
+                                    color = PrimaryColor
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = onCancelPhotoInput,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = stringResource(R.string.photo_input_cancel),
+                                tint = SumiInk.copy(alpha = 0.5f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -320,68 +451,175 @@ fun WorkspaceInputForm(
         } else {
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
 
         // Bottom Actions Row
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Media Actions (Camera/Gallery)
+            // Media Actions (Reorderable via Long-Press Drag)
+            val density = LocalDensity.current
+            val hapticFeedback = LocalHapticFeedback.current
+            val buttonSizeDp = 48.dp
+            val buttonSpacingDp = 12.dp
+            val slotStridePx = with(density) { (buttonSizeDp + buttonSpacingDp).toPx() }
+
+            var buttonOrder by remember(uiPreferencesRepository) {
+                mutableStateOf(
+                    WorkspaceMediaAction.parseOrder(
+                        uiPreferencesRepository?.getWorkspaceMediaButtonOrder()
+                    )
+                )
+            }
+            var draggedAction by remember { mutableStateOf<WorkspaceMediaAction?>(null) }
+            var dragStartSlotIndex by remember { mutableIntStateOf(0) }
+            var totalDragX by remember { mutableFloatStateOf(0f) }
+
             Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Dashed attachment button (opens BottomSheet or just primary media action)
-                // Let's implement Camera and Album directly as elegant small icons
-                IconButton(
-                    onClick = onNavigateToCamera,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(ZenThemeColors.buttonBg(), RoundedCornerShape(12.dp))
-                        .drawBehind {
-                            drawRoundRect(
-                                color = SumiInk.copy(alpha = 0.15f),
-                                style = Stroke(
-                                    width = 1.dp.toPx(),
-                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
-                                ),
-                                cornerRadius = CornerRadius(12.dp.toPx())
-                            )
+                horizontalArrangement = Arrangement.spacedBy(buttonSpacingDp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.pointerInput(slotStridePx, uiPreferencesRepository) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { startOffset ->
+                            val startSlot = (startOffset.x / slotStridePx)
+                                .toInt()
+                                .coerceIn(0, buttonOrder.lastIndex)
+                            dragStartSlotIndex = startSlot
+                            draggedAction = buttonOrder[startSlot]
+                            totalDragX = 0f
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        },
+                        onDragEnd = {
+                            draggedAction = null
+                            totalDragX = 0f
+                        },
+                        onDragCancel = {
+                            draggedAction = null
+                            totalDragX = 0f
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val active = draggedAction ?: return@detectDragGesturesAfterLongPress
+                            totalDragX += dragAmount.x
+                            val desiredLeftX = dragStartSlotIndex * slotStridePx + totalDragX
+                            val targetIndex = (desiredLeftX / slotStridePx)
+                                .roundToInt()
+                                .coerceIn(0, buttonOrder.lastIndex)
+                            val currentIndex = buttonOrder.indexOf(active)
+                            if (currentIndex != -1 && targetIndex != currentIndex) {
+                                val updated = buttonOrder.toMutableList().apply {
+                                    removeAt(currentIndex)
+                                    add(targetIndex, active)
+                                }
+                                buttonOrder = updated
+                                uiPreferencesRepository?.saveWorkspaceMediaButtonOrder(
+                                    WorkspaceMediaAction.serializeOrder(updated)
+                                )
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
                         }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PhotoCamera,
-                        contentDescription = stringResource(R.string.camera),
-                        tint = SumiInk.copy(alpha = 0.5f),
-                        modifier = Modifier.size(22.dp)
                     )
                 }
+            ) {
+                val isDarkMode = ZenThemeColors.isDark()
+                val spotColor = if (isDarkMode) Color.Black.copy(alpha = 0.45f) else ZenColors.SumiInk.copy(alpha = 0.22f)
+                val ambientColor = if (isDarkMode) Color.Black.copy(alpha = 0.25f) else ZenColors.SumiInk.copy(alpha = 0.10f)
 
-                IconButton(
-                    onClick = { galleryLauncher.launch("image/*") },
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(ZenThemeColors.buttonBg(), RoundedCornerShape(12.dp))
-                        .drawBehind {
-                            drawRoundRect(
-                                color = SumiInk.copy(alpha = 0.15f),
-                                style = Stroke(
-                                    width = 1.dp.toPx(),
-                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
-                                ),
-                                cornerRadius = CornerRadius(12.dp.toPx())
+                buttonOrder.forEachIndexed { index, action ->
+                    key(action) {
+                        val isDragged = draggedAction == action
+                        val scale by animateFloatAsState(
+                            targetValue = if (isDragged) 1.08f else 1f,
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            label = "mediaButtonScale"
+                        )
+                        val animatedElevation by animateDpAsState(
+                            targetValue = if (isDragged) 3.5.dp else 0.dp,
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            label = "mediaButtonElevation"
+                        )
+                        val animatedLiftY by animateFloatAsState(
+                            targetValue = if (isDragged) with(density) { (-2).dp.toPx() } else 0f,
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            label = "mediaButtonLiftY"
+                        )
+                        val isElevated = isDragged || scale > 1.005f
+
+                        val draggedTranslationX = if (isDragged) {
+                            val minLeftX = -slotStridePx * 0.25f
+                            val maxLeftX = buttonOrder.lastIndex * slotStridePx + slotStridePx * 0.25f
+                            val clampedLeftX = (dragStartSlotIndex * slotStridePx + totalDragX)
+                                .coerceIn(minLeftX, maxLeftX)
+                            clampedLeftX - index * slotStridePx
+                        } else {
+                            0f
+                        }
+
+                        val icon = when (action) {
+                            WorkspaceMediaAction.PHOTO_INPUT -> Icons.Default.DocumentScanner
+                            WorkspaceMediaAction.CAMERA -> Icons.Default.PhotoCamera
+                            WorkspaceMediaAction.ALBUM -> Icons.Default.Image
+                        }
+                        val contentDescRes = when (action) {
+                            WorkspaceMediaAction.PHOTO_INPUT -> R.string.photo_input_camera
+                            WorkspaceMediaAction.CAMERA -> R.string.direct_image_analysis
+                            WorkspaceMediaAction.ALBUM -> R.string.album
+                        }
+                        val iconAlpha = when (action) {
+                            WorkspaceMediaAction.PHOTO_INPUT -> 0.6f
+                            WorkspaceMediaAction.CAMERA -> 0.5f
+                            WorkspaceMediaAction.ALBUM -> 0.5f
+                        }
+                        val onClickAction: () -> Unit = when (action) {
+                            WorkspaceMediaAction.PHOTO_INPUT -> onNavigateToPhotoInputCamera
+                            WorkspaceMediaAction.CAMERA -> onNavigateToCamera
+                            WorkspaceMediaAction.ALBUM -> ({ galleryLauncher.launch("image/*") })
+                        }
+
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .zIndex(if (isElevated) 1f else 0f)
+                                .graphicsLayer {
+                                    translationX = draggedTranslationX
+                                    translationY = animatedLiftY
+                                    scaleX = scale
+                                    scaleY = scale
+                                    shadowElevation = animatedElevation.toPx()
+                                    shape = RoundedCornerShape(12.dp)
+                                    clip = false
+                                    spotShadowColor = spotColor
+                                    ambientShadowColor = ambientColor
+                                }
+                                .size(buttonSizeDp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(ZenThemeColors.buttonBg(), RoundedCornerShape(12.dp))
+                                .drawBehind {
+                                    drawRoundRect(
+                                        color = if (isDragged) PrimaryColor.copy(alpha = 0.6f) else SumiInk.copy(alpha = 0.15f),
+                                        style = Stroke(
+                                            width = if (isDragged) 1.5.dp.toPx() else 1.dp.toPx(),
+                                            pathEffect = if (isDragged) null else PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
+                                        ),
+                                        cornerRadius = CornerRadius(12.dp.toPx())
+                                    )
+                                }
+                                .clickable(
+                                    enabled = draggedAction == null,
+                                    role = Role.Button,
+                                    onClick = onClickAction
+                                )
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = stringResource(contentDescRes),
+                                tint = SumiInk.copy(alpha = if (isDragged) 0.85f else iconAlpha),
+                                modifier = Modifier.size(22.dp)
                             )
                         }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Image,
-                        contentDescription = stringResource(R.string.album),
-                        tint = SumiInk.copy(alpha = 0.5f),
-                        modifier = Modifier.size(22.dp)
-                    )
+                    }
                 }
             }
 

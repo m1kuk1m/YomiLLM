@@ -109,16 +109,13 @@ fun WorkspaceScreen(
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
     val latestUiState by rememberUpdatedState(uiState)
+    val photoInputStatus by viewModel.photoInputStatus.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     
     val isPlayingTts by viewModel.isPlayingTts.collectAsState(initial = false)
     var isResultScrolled by remember { mutableStateOf(false) }
     var topBoxHeight by remember { mutableStateOf(0.dp) }
     var lastTextChangeTime by remember { mutableStateOf(0L) }
-
-    LaunchedEffect(uiState.currentOriginalText) {
-        lastTextChangeTime = System.currentTimeMillis()
-    }
 
     // Reset scroll and floating panel header states when selected record changes
     LaunchedEffect(uiState.selectedRecord?.id) {
@@ -132,6 +129,13 @@ fun WorkspaceScreen(
     // Hoisted States for input form
     var textInputState by androidx.compose.runtime.saveable.rememberSaveable(uiState.currentOriginalText) {
         mutableStateOf(uiState.currentOriginalText)
+    }
+
+    LaunchedEffect(uiState.currentOriginalText) {
+        lastTextChangeTime = System.currentTimeMillis()
+        if (textInputState != uiState.currentOriginalText) {
+            textInputState = uiState.currentOriginalText
+        }
     }
     var selectedImageUriState by remember { mutableStateOf<Uri?>(null) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
@@ -266,6 +270,17 @@ fun WorkspaceScreen(
                         viewModel.startAnalysis("", uri)
                     }
                     cameraNavBackStackEntry?.savedStateHandle?.set("captured_image_uri", null)
+                }
+            }
+    }
+
+    // Photo Input Playback Observer
+    LaunchedEffect(cameraNavBackStackEntry) {
+        cameraNavBackStackEntry?.savedStateHandle?.getStateFlow<Boolean?>("photo_input_completed", null)
+            ?.collect { completed ->
+                if (completed == true) {
+                    viewModel.startPhotoInputPlayback()
+                    cameraNavBackStackEntry?.savedStateHandle?.set("photo_input_completed", null)
                 }
             }
     }
@@ -468,11 +483,16 @@ fun WorkspaceScreen(
                                         onCancelAnalysis = {
                                             uiState.selectedRecord?.id?.let { viewModel.cancelAnalysis(it) }
                                         },
-                                        onNavigateToCamera = { navController.navigate("camera") },
+                                        onNavigateToCamera = { navController.navigate("camera?cameraMode=direct_analysis") },
+                                        onNavigateToPhotoInputCamera = { navController.navigate("camera?cameraMode=text_input") },
+                                        photoInputStatus = photoInputStatus,
+                                        onSkipPhotoInput = { viewModel.skipPhotoInputAnimation() },
+                                        onCancelPhotoInput = { viewModel.cancelPhotoInput() },
                                         onPickImage = { sourceUri ->
                                             viewModel.prepareImageForCamera(sourceUri)
                                         },
-                                        onNavigateToSettings = navigateToSettings
+                                        onNavigateToSettings = navigateToSettings,
+                                        uiPreferencesRepository = viewModel.uiPreferencesRepository
                                     )
                                 }
                             }

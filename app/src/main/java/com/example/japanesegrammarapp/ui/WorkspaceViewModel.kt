@@ -87,8 +87,11 @@ class WorkspaceViewModel @Inject constructor(
     private val eventBus: AnalysisEventBus,
     private val bookmarkRepository: BookmarkRepository,
     private val detailedResultSerializer: DetailedResultSerializer,
-    val uiPreferencesRepository: UiPreferencesRepository
+    val uiPreferencesRepository: UiPreferencesRepository,
+    val photoInputQueueManager: com.example.japanesegrammarapp.domain.usecase.PhotoInputQueueManager
 ) : ViewModel() {
+
+    val photoInputStatus = photoInputQueueManager.status
 
     private val _uiState = MutableStateFlow(createInitialUiState())
     val uiState: StateFlow<WorkspaceUiState> = _uiState.asStateFlow()
@@ -691,6 +694,23 @@ class WorkspaceViewModel @Inject constructor(
 
     fun setCurrentOriginalText(text: String) {
         _uiState.update { it.copy(currentOriginalText = text) }
+    }
+
+    fun startPhotoInputPlayback() {
+        photoInputQueueManager.startPlayback(
+            initialText = _uiState.value.currentOriginalText,
+            onTextUpdated = { updatedText ->
+                _uiState.update { it.copy(currentOriginalText = updatedText) }
+            }
+        )
+    }
+
+    fun skipPhotoInputAnimation() {
+        photoInputQueueManager.skipAnimation()
+    }
+
+    fun cancelPhotoInput() {
+        photoInputQueueManager.cancelAll()
     }
 
     fun setUseOcr(value: Boolean) {

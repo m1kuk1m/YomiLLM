@@ -58,6 +58,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.background
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.SwapHoriz
 import com.example.japanesegrammarapp.R
 import com.example.japanesegrammarapp.domain.model.LlmEndpoint
 import com.example.japanesegrammarapp.domain.model.ReasoningLevel
@@ -65,37 +69,35 @@ import com.example.japanesegrammarapp.domain.model.ComponentReasoningLevel
 import com.example.japanesegrammarapp.ui.SettingsUiState
 
 @Composable
-fun SettingsApiPrioritySection(
+fun SettingsApiModelSection(
     uiState: SettingsUiState,
     providers: List<String>,
     providerModels: Map<String, List<String>>,
     onActiveProviderChange: (String) -> Unit,
     onActiveModelChange: (String) -> Unit,
-    onBackupProviderChange: (String) -> Unit,
-    onBackupModelChange: (String) -> Unit,
-    onUseBackupApiChange: (Boolean) -> Unit,
-    onAutoRetryOnErrorChange: (Boolean) -> Unit,
-    onFailoverToNextEndpointChange: (Boolean) -> Unit,
-    onReasoningLevelChange: (ReasoningLevel) -> Unit,
-    onComponentReasoningLevelChange: (String, ComponentReasoningLevel) -> Unit,
     onOpenCotDialog: () -> Unit,
     onOpenComponentModelDialog: () -> Unit
 ) {
     val sumiInk = MaterialTheme.colorScheme.onBackground
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val onPrimaryColor = MaterialTheme.colorScheme.onPrimary
     val activeProvider = uiState.activeProvider
 
-    SettingsGroup(title = stringResource(R.string.api_config)) {
+    SettingsGroup(title = stringResource(R.string.settings_llm_group_model)) {
         var mainProviderExpanded by remember { mutableStateOf(false) }
         SettingsItem(
             icon = Icons.Default.Star,
             title = stringResource(R.string.main_api),
-            subtitle = activeProvider,
             onClick = { mainProviderExpanded = true },
             trailingContent = {
                 Box {
-                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = sumiInk.copy(alpha = 0.5f))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SettingsValueBadge(text = activeProvider, highlighted = true)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = sumiInk.copy(alpha = 0.5f)
+                        )
+                    }
                     DropdownMenu(
                         expanded = mainProviderExpanded,
                         onDismissRequest = { mainProviderExpanded = false }
@@ -146,6 +148,39 @@ fun SettingsApiPrioritySection(
 
         SettingsDivider()
 
+        val componentLabels = com.example.japanesegrammarapp.domain.model.AnalysisModule.entries.map { it.id }
+
+        // モジュール別モデル設定 - 弹窗式单独配置
+        val overrideCount = componentLabels.count {
+            uiState.componentModelConfigs[it]?.isGlobal == false
+        }
+        val moduleModelSubtitle = if (overrideCount == 0) {
+            stringResource(R.string.module_model_desc)
+        } else {
+            stringResource(R.string.module_model_overrides_count, overrideCount)
+        }
+        SettingsItem(
+            icon = Icons.Default.Hub,
+            title = stringResource(R.string.module_model_title),
+            subtitle = moduleModelSubtitle,
+            onClick = onOpenComponentModelDialog,
+            trailingContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (overrideCount > 0) {
+                        SettingsValueBadge(text = overrideCount.toString(), highlighted = true)
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = sumiInk.copy(alpha = 0.5f)
+                    )
+                }
+            }
+        )
+
+        SettingsDivider()
+
         // 思考链 (CoT) 思考深度 - 弹窗式单独配置
         val strOff = stringResource(R.string.cot_level_off)
         val strAuto = stringResource(R.string.cot_level_auto)
@@ -154,7 +189,6 @@ fun SettingsApiPrioritySection(
         val strHigh = stringResource(R.string.cot_level_high)
         val strDesc = stringResource(R.string.cot_dialog_desc)
 
-        val componentLabels = com.example.japanesegrammarapp.domain.model.AnalysisModule.entries.map { it.id }
         val levelCounts = componentLabels.map { uiState.componentReasoningLevels[it] ?: ComponentReasoningLevel.GLOBAL }
             .groupingBy { it }
             .eachCount()
@@ -196,48 +230,33 @@ fun SettingsApiPrioritySection(
                 )
             }
         )
+    }
+}
 
-        SettingsDivider()
+@Composable
+fun SettingsApiFailoverSection(
+    uiState: SettingsUiState,
+    providers: List<String>,
+    providerModels: Map<String, List<String>>,
+    onBackupProviderChange: (String) -> Unit,
+    onBackupModelChange: (String) -> Unit,
+    onUseBackupApiChange: (Boolean) -> Unit,
+    onAutoRetryOnErrorChange: (Boolean) -> Unit,
+    onFailoverToNextEndpointChange: (Boolean) -> Unit
+) {
+    val sumiInk = MaterialTheme.colorScheme.onBackground
 
-        // モジュール別モデル設定 - 弹窗式单独配置
-        val overrideCount = componentLabels.count {
-            uiState.componentModelConfigs[it]?.isGlobal == false
-        }
-        val moduleModelSubtitle = if (overrideCount == 0) {
-            stringResource(R.string.module_model_desc)
-        } else {
-            stringResource(R.string.module_model_overrides_count, overrideCount)
-        }
+    SettingsGroup(title = stringResource(R.string.settings_llm_group_failover)) {
         SettingsItem(
-            icon = Icons.Default.AutoAwesome,
-            title = stringResource(R.string.module_model_title),
-            subtitle = moduleModelSubtitle,
-            onClick = onOpenComponentModelDialog,
-            trailingContent = {
-                Icon(
-                    Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = sumiInk.copy(alpha = 0.5f)
-                )
-            }
-        )
-
-        SettingsDivider()
-
-        SettingsItem(
-            icon = Icons.Default.Tune,
+            icon = Icons.Default.Refresh,
             title = stringResource(R.string.auto_retry_on_error),
             subtitle = stringResource(R.string.auto_retry_on_error_desc),
+            onClick = { onAutoRetryOnErrorChange(!uiState.autoRetryOnError) },
             trailingContent = {
                 Switch(
                     checked = uiState.autoRetryOnError,
                     onCheckedChange = onAutoRetryOnErrorChange,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = onPrimaryColor,
-                        checkedTrackColor = primaryColor,
-                        uncheckedThumbColor = sumiInk.copy(alpha = 0.4f),
-                        uncheckedTrackColor = sumiInk.copy(alpha = 0.1f)
-                    )
+                    colors = SettingsSwitchColors()
                 )
             }
         )
@@ -245,19 +264,15 @@ fun SettingsApiPrioritySection(
         SettingsDivider()
 
         SettingsItem(
-            icon = Icons.Default.Tune,
+            icon = Icons.Default.SwapHoriz,
             title = stringResource(R.string.failover_to_next_endpoint),
             subtitle = stringResource(R.string.failover_to_next_endpoint_desc),
+            onClick = { onFailoverToNextEndpointChange(!uiState.failoverToNextEndpoint) },
             trailingContent = {
                 Switch(
                     checked = uiState.failoverToNextEndpoint,
                     onCheckedChange = onFailoverToNextEndpointChange,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = onPrimaryColor,
-                        checkedTrackColor = primaryColor,
-                        uncheckedThumbColor = sumiInk.copy(alpha = 0.4f),
-                        uncheckedTrackColor = sumiInk.copy(alpha = 0.1f)
-                    )
+                    colors = SettingsSwitchColors()
                 )
             }
         )
@@ -268,16 +283,12 @@ fun SettingsApiPrioritySection(
             icon = Icons.Default.Backup,
             title = stringResource(R.string.use_backup_api),
             subtitle = stringResource(R.string.use_backup_api_desc),
+            onClick = { onUseBackupApiChange(!uiState.useBackupApi) },
             trailingContent = {
                 Switch(
                     checked = uiState.useBackupApi,
                     onCheckedChange = onUseBackupApiChange,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = onPrimaryColor,
-                        checkedTrackColor = primaryColor,
-                        uncheckedThumbColor = sumiInk.copy(alpha = 0.4f),
-                        uncheckedTrackColor = sumiInk.copy(alpha = 0.1f)
-                    )
+                    colors = SettingsSwitchColors()
                 )
             }
         )
@@ -294,11 +305,14 @@ fun SettingsApiPrioritySection(
                 SettingsItem(
                     icon = Icons.Default.Backup,
                     title = stringResource(R.string.backup_api),
-                    subtitle = uiState.backupProvider,
                     onClick = { backupProviderExpanded = true },
                     trailingContent = {
                         Box {
-                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = sumiInk.copy(alpha = 0.5f))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                SettingsValueBadge(text = uiState.backupProvider)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = sumiInk.copy(alpha = 0.5f))
+                            }
                             DropdownMenu(
                                 expanded = backupProviderExpanded,
                                 onDismissRequest = { backupProviderExpanded = false }
@@ -375,14 +389,19 @@ fun SettingsCredentialsSection(
 
     Text(
         text = stringResource(R.string.credentials),
-        style = MaterialTheme.typography.titleMedium,
-        color = sumiInk,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
+        style = MaterialTheme.typography.labelLarge,
+        color = sumiInk.copy(alpha = 0.65f),
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 6.dp, bottom = 8.dp)
     )
 
     providers.forEach { provider ->
         val isExpanded = expandedProvider == provider
+        val endpoints = uiState.providerEndpoints[provider].orEmpty()
+        val activeEndpointCount = endpoints.count { it.enabled && uiState.endpointHasKeys[it.id] == true }
+        val modelCount = providerModels[provider].orEmpty().size
+        val isMainProvider = provider == uiState.activeProvider
+        val isBackupProvider = uiState.useBackupApi && provider == uiState.backupProvider
 
         Card(
             modifier = Modifier
@@ -390,7 +409,10 @@ fun SettingsCredentialsSection(
                 .padding(bottom = 12.dp)
                 .clip(RoundedCornerShape(16.dp)),
             colors = CardDefaults.cardColors(containerColor = surfaceColor),
-            border = BorderStroke(1.dp, sumiInk.copy(alpha = 0.08f)),
+            border = BorderStroke(
+                width = 1.dp,
+                color = if (isMainProvider) primaryColor.copy(alpha = 0.35f) else sumiInk.copy(alpha = 0.08f)
+            ),
             shape = RoundedCornerShape(16.dp),
             elevation = CardDefaults.cardElevation(0.dp)
         ) {
@@ -399,16 +421,67 @@ fun SettingsCredentialsSection(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onExpandedProviderChange(if (isExpanded) null else provider) }
-                        .padding(16.dp),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        provider,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = sumiInk
-                    )
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (activeEndpointCount > 0) primaryColor.copy(alpha = 0.12f)
+                                    else sumiInk.copy(alpha = 0.06f)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Dns,
+                                contentDescription = null,
+                                tint = if (activeEndpointCount > 0) primaryColor else sumiInk.copy(alpha = 0.5f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = provider,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = sumiInk
+                                )
+                                if (isMainProvider) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    SettingsValueBadge(
+                                        text = stringResource(R.string.provider_badge_main),
+                                        highlighted = true
+                                    )
+                                }
+                                if (isBackupProvider) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    SettingsValueBadge(
+                                        text = stringResource(R.string.provider_badge_backup),
+                                        highlighted = false
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (activeEndpointCount > 0) {
+                                    stringResource(R.string.provider_summary_configured, activeEndpointCount, modelCount)
+                                } else {
+                                    stringResource(R.string.provider_summary_unconfigured, modelCount)
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (activeEndpointCount > 0) sumiInk.copy(alpha = 0.65f) else sumiInk.copy(alpha = 0.45f)
+                            )
+                        }
+                    }
                     Icon(
                         if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                         contentDescription = null,
@@ -422,10 +495,12 @@ fun SettingsCredentialsSection(
                     exit = shrinkVertically(animationSpec = tween(180)) + fadeOut(animationSpec = tween(160))
                 ) {
                     Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
+                        SettingsDivider(horizontalPadding = 0.dp)
+                        Spacer(modifier = Modifier.height(12.dp))
                         val isFetchingProvider = uiState.isFetchingModels && uiState.fetchingProvider == provider && uiState.fetchingEndpointId == null
 
                         EndpointPoolSection(
-                            endpoints = uiState.providerEndpoints[provider].orEmpty(),
+                            endpoints = endpoints,
                             endpointHasKeys = uiState.endpointHasKeys,
                             fetchingEndpointId = uiState.fetchingEndpointId,
                             onAddEndpoint = { onAddEndpoint(provider) },
@@ -480,71 +555,3 @@ fun SettingsCredentialsSection(
     }
 }
 
-@Composable
-private fun SettingsDivider() {
-    val sumiInk = MaterialTheme.colorScheme.onBackground
-    Divider(color = sumiInk.copy(alpha = 0.05f), modifier = Modifier.padding(horizontal = 16.dp))
-}
-
-@Composable
-fun SettingsSliderItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    onValueChange: (Float) -> Unit,
-    valueLabel: String
-) {
-    val sumiInk = MaterialTheme.colorScheme.onBackground
-    val primaryColor = MaterialTheme.colorScheme.primary
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = sumiInk.copy(alpha = 0.6f),
-            modifier = Modifier
-                .padding(top = 2.dp)
-                .size(22.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
-                    color = sumiInk
-                )
-                Text(
-                    text = valueLabel,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = primaryColor
-                )
-            }
-            androidx.compose.material3.Slider(
-                value = value,
-                onValueChange = onValueChange,
-                valueRange = valueRange,
-                steps = steps,
-                colors = androidx.compose.material3.SliderDefaults.colors(
-                    thumbColor = primaryColor,
-                    activeTrackColor = primaryColor,
-                    inactiveTrackColor = sumiInk.copy(alpha = 0.1f)
-                ),
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
-            )
-        }
-    }
-}

@@ -1,7 +1,5 @@
 package com.example.japanesegrammarapp.ui.screens
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,19 +10,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,7 +34,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
@@ -43,8 +42,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.KeyboardActions
 import com.example.japanesegrammarapp.R
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
@@ -67,7 +64,8 @@ fun SettingsTtsSection(
     onRequestClearTtsKey: (String) -> Unit
 ) {
     val sumiInk = MaterialTheme.colorScheme.onBackground
-    val surfaceColor = MaterialTheme.colorScheme.surface
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val onPrimaryColor = MaterialTheme.colorScheme.onPrimary
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val defaultKeyboardActions = KeyboardActions(onDone = {
@@ -75,37 +73,33 @@ fun SettingsTtsSection(
         focusManager.clearFocus()
     })
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 12.dp)
-            .clip(RoundedCornerShape(16.dp)),
-        colors = CardDefaults.cardColors(containerColor = surfaceColor),
-        border = BorderStroke(1.dp, sumiInk.copy(alpha = 0.08f)),
-        shape = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(0.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            var ttsProviderExpanded by remember { mutableStateOf(false) }
-            val ttsProviders = listOf("OpenAI", "Google", "Microsoft")
+    val isKeySaved = savedTtsKeys[selectedTtsProvider]?.isNotBlank() == true
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { ttsProviderExpanded = true }
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    stringResource(R.string.tts_provider),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = sumiInk
-                )
+    SettingsGroup(
+        title = stringResource(R.string.settings_tts_group_config),
+        headerTrailing = {
+            SettingsValueBadge(
+                text = if (isKeySaved) {
+                    stringResource(R.string.tts_key_configured)
+                } else {
+                    stringResource(R.string.tts_key_not_configured)
+                },
+                highlighted = isKeySaved
+            )
+        }
+    ) {
+        var ttsProviderExpanded by remember { mutableStateOf(false) }
+        val ttsProviders = listOf("OpenAI", "Google", "Microsoft")
+
+        SettingsItem(
+            icon = Icons.Default.RecordVoiceOver,
+            title = stringResource(R.string.tts_provider),
+            onClick = { ttsProviderExpanded = true },
+            trailingContent = {
                 Box {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(selectedTtsProvider, color = sumiInk.copy(alpha = 0.7f))
+                        SettingsValueBadge(text = selectedTtsProvider, highlighted = true)
+                        Spacer(modifier = Modifier.width(4.dp))
                         Icon(Icons.Default.KeyboardArrowDown, null, tint = sumiInk.copy(alpha = 0.5f))
                     }
                     DropdownMenu(
@@ -124,9 +118,11 @@ fun SettingsTtsSection(
                     }
                 }
             }
+        )
 
-            Spacer(modifier = Modifier.height(16.dp))
+        SettingsDivider()
 
+        Column(modifier = Modifier.padding(16.dp)) {
             var ttsKeyVisible by remember { mutableStateOf(false) }
 
             if (selectedTtsProvider == "OpenAI" || selectedTtsProvider == "Google") {
@@ -136,11 +132,11 @@ fun SettingsTtsSection(
                     label = { Text(stringResource(R.string.base_url)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(10.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = defaultKeyboardActions
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
             }
 
             if (selectedTtsProvider == "Microsoft") {
@@ -150,11 +146,11 @@ fun SettingsTtsSection(
                     label = { Text(stringResource(R.string.tts_region_placeholder)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(10.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = defaultKeyboardActions
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
             }
 
             OutlinedTextField(
@@ -169,13 +165,49 @@ fun SettingsTtsSection(
                         Icon(if (ttsKeyVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, null)
                     }
                 },
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(10.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = defaultKeyboardActions
             )
-            Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedButton(
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = stringResource(R.string.settings_tts_group_voice),
+                style = MaterialTheme.typography.labelMedium,
+                color = sumiInk.copy(alpha = 0.6f),
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+            )
+
+            if (selectedTtsProvider == "OpenAI") {
+                OutlinedTextField(
+                    value = ttsModels[selectedTtsProvider] ?: "",
+                    onValueChange = { onTtsModelChange(selectedTtsProvider, it) },
+                    label = { Text(stringResource(R.string.tts_model_placeholder)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = defaultKeyboardActions
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            OutlinedTextField(
+                value = ttsVoices[selectedTtsProvider] ?: "",
+                onValueChange = { onTtsVoiceChange(selectedTtsProvider, it) },
+                label = { Text(stringResource(R.string.tts_voice_placeholder)) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = RoundedCornerShape(10.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = defaultKeyboardActions
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
                 onClick = {
                     val key = ttsKeys[selectedTtsProvider] ?: ""
                     if (key.isBlank() && savedTtsKeys[selectedTtsProvider]?.isNotBlank() == true) {
@@ -185,38 +217,18 @@ fun SettingsTtsSection(
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp)
+                colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                shape = RoundedCornerShape(10.dp)
             ) {
-                Icon(Icons.Default.Save, null, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Save, null, modifier = Modifier.size(18.dp), tint = onPrimaryColor)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.save_tts_settings))
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (selectedTtsProvider == "OpenAI") {
-                OutlinedTextField(
-                    value = ttsModels[selectedTtsProvider] ?: "",
-                    onValueChange = { onTtsModelChange(selectedTtsProvider, it) },
-                    label = { Text(stringResource(R.string.tts_model_placeholder)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    shape = RoundedCornerShape(8.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = defaultKeyboardActions
+                Text(
+                    text = stringResource(R.string.save_tts_settings),
+                    color = onPrimaryColor,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Spacer(modifier = Modifier.height(8.dp))
             }
-
-            OutlinedTextField(
-                value = ttsVoices[selectedTtsProvider] ?: "",
-                onValueChange = { onTtsVoiceChange(selectedTtsProvider, it) },
-                label = { Text(stringResource(R.string.tts_voice_placeholder)) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = RoundedCornerShape(8.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = defaultKeyboardActions
-            )
         }
     }
 }
+

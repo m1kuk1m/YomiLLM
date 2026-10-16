@@ -31,6 +31,49 @@ class UiPreferencesRepositoryImplTest {
 
         assertEquals("MOJI", repository.getLastDictionary("EUDIC"))
     }
+
+    @Test
+    fun workspaceMediaButtonOrderRoundTripAndParsing() {
+        val repository = UiPreferencesRepositoryImpl(InMemorySharedPreferences())
+
+        val defaultOrderStr = repository.getWorkspaceMediaButtonOrder()
+        assertEquals("PHOTO_INPUT,CAMERA,ALBUM", defaultOrderStr)
+        assertEquals(
+            listOf(
+                com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.PHOTO_INPUT,
+                com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.CAMERA,
+                com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.ALBUM
+            ),
+            com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.parseOrder(defaultOrderStr)
+        )
+
+        val customOrder = listOf(
+            com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.ALBUM,
+            com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.PHOTO_INPUT,
+            com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.CAMERA
+        )
+        repository.saveWorkspaceMediaButtonOrder(
+            com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.serializeOrder(customOrder)
+        )
+
+        assertEquals("ALBUM,PHOTO_INPUT,CAMERA", repository.getWorkspaceMediaButtonOrder())
+        assertEquals(
+            customOrder,
+            com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.parseOrder(
+                repository.getWorkspaceMediaButtonOrder()
+            )
+        )
+
+        // Partial/corrupted string falls back gracefully by appending missing actions
+        assertEquals(
+            listOf(
+                com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.CAMERA,
+                com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.PHOTO_INPUT,
+                com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.ALBUM
+            ),
+            com.example.japanesegrammarapp.ui.screens.components.WorkspaceMediaAction.parseOrder("CAMERA,INVALID")
+        )
+    }
 }
 
 private class InMemorySharedPreferences : SharedPreferences {

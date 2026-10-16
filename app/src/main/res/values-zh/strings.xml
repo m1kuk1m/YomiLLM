@@ -42,6 +42,16 @@
     <string name="workspace_short_title">WORKSPACE</string>
     <string name="input_hint_elegant">输入日文...</string>
     <string name="camera">拍照</string>
+    <string name="photo_input_camera">拍照提取文字</string>
+    <string name="direct_image_analysis">整图直接解析</string>
+    <string name="camera_capture_next">继续拍下一张</string>
+    <string name="camera_capture_done">完成</string>
+    <string name="camera_batch_count">已拍 %1$d 张</string>
+    <string name="photo_input_status_recognizing">正在识别第 %1$d/%2$d 张...</string>
+    <string name="photo_input_status_typing">正在输入文字...</string>
+    <string name="photo_input_skip">跳过动画</string>
+    <string name="photo_input_cancel">取消</string>
+    <string name="photo_input_failed">部分识别失败，已自动回退本地 OCR</string>
     <string name="album">相册</string>
     <string name="start_parse">解析开始</string>
 
@@ -769,5 +779,32 @@
     <string name="deck_sync_stop_service">停止服务</string>
     <string name="deck_sync_notif_title">收到 Steam Deck 游戏截图</string>
     <string name="deck_sync_notif_desc">轻点直接进入台词框圈选与日文语法解析</string>
+
+    <!-- Settings Reorganization & Status Summaries -->
+    <string name="settings_group_overview">数据与学习</string>
+    <string name="settings_group_ai_core">AI 与核心解析</string>
+    <string name="settings_group_experience">常规与外观</string>
+    <string name="settings_group_device_advanced">设备联动与高级</string>
+    <string name="settings_statistics_subtitle">学习连续性、分析记录与词汇复习</string>
+    <string name="settings_appearance_theme_group">主题与背景</string>
+    <string name="settings_general_language_group">界面与语言</string>
+    <string name="settings_general_workflow_group">分析工作流与自动化</string>
+    <string name="settings_ocr_basic_group">扫描与识别引擎</string>
+    <string name="settings_ocr_advanced_group">高级参数调优</string>
+    <string name="settings_llm_group_model">模型与智能表现</string>
+    <string name="settings_llm_group_failover">容灾与备用策略</string>
+    <string name="settings_llm_group_prompts_usage">提示词与用量统计</string>
+    <string name="settings_tts_group_config">服务商与连接凭据</string>
+    <string name="settings_tts_group_voice">语音与模型参数</string>
+    <string name="settings_advanced_logs_group">诊断与开发者日志</string>
+    <string name="provider_badge_main">主用</string>
+    <string name="provider_badge_backup">备用</string>
+    <string name="provider_summary_configured">已启用 %1$d 个节点 · %2$d 个模型</string>
+    <string name="provider_summary_unconfigured">未启用节点 · %1$d 个模型</string>
+    <string name="tts_key_configured">已配置密钥</string>
+    <string name="tts_key_not_configured">未配置密钥</string>
+    <string name="ocr_status_enabled">本地 OCR 开启</string>
+    <string name="ocr_status_disabled">AI 视觉直传</string>
+    <string name="advanced_summary_subtitle">API 调试返回与应用运行日志</string>
 </resources>
 

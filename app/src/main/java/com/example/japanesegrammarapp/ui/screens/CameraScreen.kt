@@ -66,10 +66,12 @@ import com.example.japanesegrammarapp.domain.model.OcrBoxDetectionSettings
 fun CameraScreen(
     navController: NavController,
     galleryImageUriString: String? = null,
+    cameraMode: String = "direct_analysis",
     ocrBoxDetectionSettings: OcrBoxDetectionSettings = OcrBoxDetectionSettings.DEFAULT,
     autoDeskewAfterCapture: Boolean = false,
     settingsLoaded: Boolean = true,
-    uiPreferencesRepository: com.example.japanesegrammarapp.domain.repository.UiPreferencesRepository
+    uiPreferencesRepository: com.example.japanesegrammarapp.domain.repository.UiPreferencesRepository,
+    cameraViewModel: com.example.japanesegrammarapp.ui.CameraViewModel? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -103,6 +105,12 @@ fun CameraScreen(
     val deviceOrientation = rememberDeviceOrientation()
     var captureDeviceOrientation by rememberSaveable { mutableStateOf(DeviceOrientation.PORTRAIT) }
     var screenMode by rememberSaveable { mutableStateOf(CameraScreenMode.CAPTURE) }
+    var photoInputBatchCount by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(cameraMode) {
+        if (cameraMode == "text_input") {
+            cameraViewModel?.startPhotoInputBatch()
+        }
+    }
     var flashMode by rememberSaveable { mutableStateOf(ImageCapture.FLASH_MODE_OFF) }
     var tempFileUriString by rememberSaveable { mutableStateOf<String?>(null) }
     var hasCameraPermission by remember {
@@ -307,6 +315,30 @@ fun CameraScreen(
         }
     }
     
+    val handleExitCamera: () -> Unit = {
+        if (cameraMode == "text_input") {
+            if (photoInputBatchCount > 0) {
+                navController.previousBackStackEntry?.savedStateHandle?.set(
+                    "photo_input_completed",
+                    true
+                )
+            } else {
+                cameraViewModel?.cancelPhotoInput()
+            }
+        }
+        navController.popBackStack()
+    }
+
+    androidx.activity.compose.BackHandler(enabled = !isBusy) {
+        if (screenMode == CameraScreenMode.CROP_REVIEW && galleryImageUriString.isNullOrBlank()) {
+            screenMode = CameraScreenMode.CAPTURE
+            replaceCapturedBitmap(null)
+            tempFileUriString = null
+        } else {
+            handleExitCamera()
+        }
+    }
+
     Scaffold(
         containerColor = SumiInk
     ) { paddingValues ->
@@ -341,9 +373,7 @@ fun CameraScreen(
                             captureEnabled = canCapture,
                             onCameraReadyChanged = { isCameraReady = it },
                             onCapture = { performCapture() },
-                            onBack = {
-                                navController.popBackStack()
-                            },
+                            onBack = { handleExitCamera() },
                             deviceOrientation = deviceOrientation
                         )
                     } else {
@@ -356,7 +386,7 @@ fun CameraScreen(
                                 }
                                 context.startActivity(intent)
                             },
-                            onBack = { navController.popBackStack() }
+                            onBack = { handleExitCamera() }
                         )
                     }
                 } else {
@@ -365,6 +395,8 @@ fun CameraScreen(
                         ImageCropReviewLayout(
                             originalBitmap = bitmap,
                             captureDeviceOrientation = captureDeviceOrientation,
+                            cameraMode = cameraMode,
+                            batchCount = photoInputBatchCount,
                             ocrBoxDetectionSettings = ocrBoxDetectionSettings,
                             autoDeskewAfterCapture = autoDeskewAfterCapture,
                             initialDeskewOutcome = deskewOutcome,
@@ -372,7 +404,7 @@ fun CameraScreen(
                             onCancel = {
                                 if (!galleryImageUriString.isNullOrBlank()) {
                                     // If started from gallery selection, go back directly
-                                    navController.popBackStack()
+                                    handleExitCamera()
                                 } else {
                                     // If camera capture, go back to camera preview
                                     screenMode = CameraScreenMode.CAPTURE
@@ -380,6 +412,39 @@ fun CameraScreen(
                                     tempFileUriString = null
                                 }
                             },
+                            onConfirmNext = if (cameraMode == "text_input") {
+                                { croppedBitmap ->
+                                    captureStage = CaptureStage.PROCESSING
+                                    val sourceBitmap = capturedBitmap
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            val outUri = saveConfirmedCrop(context, croppedBitmap, false)
+                                                ?: error("Unable to save cropped image")
+                                            withContext(Dispatchers.Main) {
+                                                cameraViewModel?.enqueuePhotoInput(outUri)
+                                                photoInputBatchCount++
+                                                screenMode = CameraScreenMode.CAPTURE
+                                                replaceCapturedBitmap(null)
+                                                tempFileUriString = null
+                                            }
+                                        } catch (error: CancellationException) {
+                                            throw error
+                                        } catch (error: Throwable) {
+                                            AppLogger.e("CAMERA", "Failed to save and enqueue crop", error)
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(context, R.string.camera_capture_failed, Toast.LENGTH_SHORT).show()
+                                            }
+                                        } finally {
+                                            if (croppedBitmap !== sourceBitmap && !croppedBitmap.isRecycled) {
+                                                croppedBitmap.recycle()
+                                            }
+                                            withContext(Dispatchers.Main) {
+                                                captureStage = CaptureStage.IDLE
+                                            }
+                                        }
+                                    }
+                                }
+                            } else null,
                             onConfirm = { croppedBitmap ->
                                 captureStage = CaptureStage.PROCESSING
                                 val sourceBitmap = capturedBitmap
@@ -388,10 +453,19 @@ fun CameraScreen(
                                         val outUri = saveConfirmedCrop(context, croppedBitmap, false)
                                             ?: error("Unable to save cropped image")
                                         withContext(Dispatchers.Main) {
-                                            navController.previousBackStackEntry?.savedStateHandle?.set(
-                                                "captured_image_uri",
-                                                outUri.toString()
-                                            )
+                                            if (cameraMode == "text_input") {
+                                                cameraViewModel?.enqueuePhotoInput(outUri)
+                                                photoInputBatchCount++
+                                                navController.previousBackStackEntry?.savedStateHandle?.set(
+                                                    "photo_input_completed",
+                                                    true
+                                                )
+                                            } else {
+                                                navController.previousBackStackEntry?.savedStateHandle?.set(
+                                                    "captured_image_uri",
+                                                    outUri.toString()
+                                                )
+                                            }
                                             replaceCapturedBitmap(null)
                                             tempFileUriString = null
                                             navController.popBackStack()

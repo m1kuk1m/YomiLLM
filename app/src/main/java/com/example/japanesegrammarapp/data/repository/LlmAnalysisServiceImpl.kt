@@ -10,6 +10,7 @@ import com.example.japanesegrammarapp.domain.model.TokenizationResult
 import com.example.japanesegrammarapp.domain.model.WordSegment
 import com.example.japanesegrammarapp.domain.model.isPunctuationToken
 import com.example.japanesegrammarapp.domain.model.PUNCTUATION_CHARS
+import com.example.japanesegrammarapp.domain.model.derivePosCategory
 import com.example.japanesegrammarapp.domain.repository.SettingsRepository
 import com.example.japanesegrammarapp.utils.AppLogger
 import com.google.gson.Gson
@@ -301,23 +302,27 @@ class LlmAnalysisServiceImpl @Inject constructor(
             val segments = lines.mapNotNull { line ->
                 val parts = line.split("|")
                 if (parts.size >= 8) {
+                    val pos = parts[3].trim().takeIf { it.isNotBlank() && it != "null" }
                     WordSegment(
                         text = parts[0].trim(),
                         reading = parts[1].trim().takeIf { it.isNotBlank() && it != "null" },
                         meaning = parts[2].trim().takeIf { it.isNotBlank() && it != "null" },
-                        partOfSpeech = parts[3].trim().takeIf { it.isNotBlank() && it != "null" },
+                        partOfSpeech = pos,
+                        posCategory = derivePosCategory(pos),
                         dictionaryForm = parts[4].trim().takeIf { it.isNotBlank() && it != "null" },
                         dictionaryFormReading = parts[5].trim().takeIf { it.isNotBlank() && it != "null" },
                         inflection = parts[6].trim().takeIf { it.isNotBlank() && it != "null" },
                         role = parts.drop(7).joinToString("|").trim().takeIf { it.isNotBlank() && it != "null" }
                     )
                 } else if (parts.size >= 5) {
+                    val pos = parts[3].trim().takeIf { it.isNotBlank() && it != "null" }
                     val remainingParts = parts.drop(4).map { it.trim() }.filter { it.isNotBlank() && it != "null" }
                     WordSegment(
                         text = parts[0].trim(),
                         reading = parts[1].trim().takeIf { it.isNotBlank() && it != "null" },
                         meaning = parts[2].trim().takeIf { it.isNotBlank() && it != "null" },
-                        partOfSpeech = parts[3].trim().takeIf { it.isNotBlank() && it != "null" },
+                        partOfSpeech = pos,
+                        posCategory = derivePosCategory(pos),
                         role = remainingParts.joinToString(" | ").takeIf { it.isNotBlank() }
                     )
                 } else null

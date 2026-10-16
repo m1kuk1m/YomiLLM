@@ -97,29 +97,117 @@ fun WordSegment.isPunctuation(): Boolean {
     return isPunctuationToken(text)
 }
 
+private val CANONICAL_POS_CATEGORIES = setOf(
+    "NOUN", "VERB", "ADJECTIVE", "AUXILIARY", "PARTICLE",
+    "ADVERB", "CONJUNCTION", "PRONOUN", "PRE_NOUN_ADJECTIVAL",
+    "INTERJECTION", "SYMBOL", "AFFIX", "PHRASE", "OTHER"
+)
+
 /**
- * Maps a partOfSpeech string (e.g. "動詞-一般") to the coarse category used for
- * chip colors and grouping (NOUN, VERB, PARTICLE, ...). Single source of truth —
- * both the chip renderer and the edit-save paths call this so that editing a
- * segment's partOfSpeech always yields a consistent posCategory.
+ * Maps a partOfSpeech string (e.g. "動詞-一般", "格助词", "接尾辞", "suffix") to the coarse
+ * category used for chip colors, grouping, and filters (NOUN, VERB, PARTICLE, ...).
+ * Single source of truth across chip rendering, LLM parsing, and bookmarking.
+ *
+ * Designed with high fault tolerance for Simplified Chinese variations, Japanese abbreviations
+ * (格助, 副助, 接助, etc.), particle subtypes, and compound POS descriptions.
  */
 fun derivePosCategory(partOfSpeech: String?): String {
-    val pos = partOfSpeech ?: ""
-    val primaryPos = pos.split("-").firstOrNull() ?: ""
+    val raw = partOfSpeech?.trim() ?: return "OTHER"
+    if (raw.isEmpty()) return "OTHER"
+
+    val upper = raw.uppercase()
+    if (upper in CANONICAL_POS_CATEGORIES) {
+        return upper
+    }
+
     return when {
-        primaryPos.contains("代名詞") -> "PRONOUN"
-        primaryPos.contains("感動詞") -> "INTERJECTION"
-        primaryPos.contains("助動詞") -> "AUXILIARY"
-        primaryPos.contains("形容") || primaryPos.contains("形状") -> "ADJECTIVE"
-        primaryPos.contains("名詞") || primaryPos.contains("数詞") -> "NOUN"
-        primaryPos.contains("動詞") -> "VERB"
-        primaryPos.contains("助詞") -> "PARTICLE"
-        primaryPos.contains("副詞") || primaryPos.contains("擬態語") -> "ADVERB"
-        primaryPos.contains("接続詞") -> "CONJUNCTION"
-        primaryPos.contains("連体詞") -> "PRE_NOUN_ADJECTIVAL"
-        primaryPos.contains("記号") -> "SYMBOL"
-        primaryPos.contains("接尾辞") || primaryPos.contains("接頭辞") -> "AFFIX"
-        primaryPos.contains("連語") || primaryPos.contains("慣用句") -> "PHRASE"
+        // 1. Symbols and punctuation
+        raw.contains("記号") || raw.contains("记号") || raw.contains("符号") ||
+            raw.contains("标点") || raw.contains("標点") || raw.contains("句読点") ||
+            raw.contains("symbol", ignoreCase = true) || raw.contains("punct", ignoreCase = true) -> "SYMBOL"
+
+        // 2. Affixes / Prefixes / Suffixes (prioritized before NOUN/VERB to capture e.g. 名詞接尾辞, 名词后缀)
+        raw.contains("接尾") || raw.contains("接頭") || raw.contains("接头") ||
+            raw.contains("接辞") || raw.contains("接缀") || raw.contains("接綴") ||
+            raw.contains("后缀") || raw.contains("後綴") || raw.contains("前缀") || raw.contains("前綴") ||
+            raw.contains("词缀") || raw.contains("詞綴") || raw.contains("词尾") || raw.contains("詞尾") ||
+            raw.contains("affix", ignoreCase = true) || raw.contains("suffix", ignoreCase = true) ||
+            raw.contains("prefix", ignoreCase = true) -> "AFFIX"
+
+        // 3. Interjections (prioritized before VERB because 感動詞/感动词 contains 動詞/动词)
+        raw.contains("感動詞") || raw.contains("感动词") ||
+            raw.contains("感嘆詞") || raw.contains("感叹词") ||
+            raw.contains("間投詞") || raw.contains("间投词") ||
+            raw.contains("叹词") || raw.contains("嘆詞") ||
+            raw.contains("interjection", ignoreCase = true) || raw.equals("int", ignoreCase = true) -> "INTERJECTION"
+
+        // 4. Adjectives / Adjectival Nouns (prioritized before VERB because 形容動詞/形容动词 contains 動詞/动词)
+        raw.contains("形容") || raw.contains("形状") || raw.contains("形動") || raw.contains("形动") ||
+            raw.contains("判定詞") || raw.contains("判定词") ||
+            raw.contains("adjective", ignoreCase = true) || raw.equals("adj", ignoreCase = true) -> "ADJECTIVE"
+
+        // 5. Auxiliaries (prioritized before VERB to prevent 助動詞/助动词 matching 動詞/动词, but excluding 補助動詞/补助动词)
+        (!raw.contains("補助動") && !raw.contains("补助动")) &&
+            (raw.contains("助動詞") || raw.contains("助动词") || raw.contains("助動") || raw.contains("助动") ||
+            raw.contains("auxiliary", ignoreCase = true) || raw.equals("aux", ignoreCase = true)) -> "AUXILIARY"
+
+        // 6. Particles (comprehensive Japanese, Simplified Chinese & abbreviations)
+        // Prioritized before ADVERB/CONJUNCTION to correctly classify 副助詞/接続助詞
+        raw.contains("助詞") || raw.contains("助词") ||
+            raw.contains("语气") || raw.contains("語気") ||
+            raw.contains("格助") || raw.contains("副助") ||
+            raw.contains("係助") || raw.contains("係り助") || raw.contains("系助") ||
+            raw.contains("接助") || raw.contains("接続助") || raw.contains("接续助") ||
+            raw.contains("終助") || raw.contains("终助") ||
+            raw.contains("並助") || raw.contains("并助") || raw.contains("並立助") || raw.contains("并列助") ||
+            raw.contains("間助") || raw.contains("间助") || raw.contains("間投助") || raw.contains("间投助") ||
+            raw.contains("準体助") || raw.contains("准体助") ||
+            raw.contains("複合助") || raw.contains("复合助") ||
+            raw.contains("取り立て") || raw.contains("提示助") ||
+            raw.contains("嘆助") || raw.contains("叹助") || raw.contains("引用助") ||
+            raw.contains("particle", ignoreCase = true) || raw.equals("prt", ignoreCase = true) -> "PARTICLE"
+
+        // 7. Pronouns (prioritized before NOUN to prevent 代名詞/代名词 from matching 名詞/名词)
+        raw.contains("代名詞") || raw.contains("代名词") || raw.contains("代詞") || raw.contains("代词") ||
+            raw.contains("pronoun", ignoreCase = true) || raw.equals("pron", ignoreCase = true) -> "PRONOUN"
+
+        // 8. Verbs (including 補助動詞/补助动词, 五段, 一段, サ変, カ変)
+        raw.contains("動詞") || raw.contains("动词") ||
+            raw.contains("サ変") || raw.contains("カ変") || raw.contains("五段") || raw.contains("一段") ||
+            raw.contains("verb", ignoreCase = true) || raw.equals("v", ignoreCase = true) -> "VERB"
+
+        // 9. Adverbs & Onomatopoeia
+        raw.contains("副詞") || raw.contains("副词") ||
+            raw.contains("擬態") || raw.contains("拟态") ||
+            raw.contains("擬声") || raw.contains("拟声") ||
+            raw.contains("象声") || raw.contains("オノマトペ") ||
+            raw.contains("adverb", ignoreCase = true) || raw.equals("adv", ignoreCase = true) -> "ADVERB"
+
+        // 10. Conjunctions
+        raw.contains("接続詞") || raw.contains("接续词") || raw.contains("接续") || raw.contains("接続") ||
+            raw.contains("连词") || raw.contains("連詞") || raw.contains("连接词") || raw.contains("连结词") ||
+            raw.contains("conjunction", ignoreCase = true) || raw.equals("conj", ignoreCase = true) -> "CONJUNCTION"
+
+        // 11. Pre-noun Adjectivals (Attributives)
+        raw.contains("連体詞") || raw.contains("连体词") || raw.contains("連体") || raw.contains("连体") ||
+            raw.contains("adnominal", ignoreCase = true) || raw.contains("prenoun", ignoreCase = true) -> "PRE_NOUN_ADJECTIVAL"
+
+        // 12. Nouns & Numerals
+        raw.contains("名詞") || raw.contains("名词") ||
+            raw.contains("数詞") || raw.contains("数词") ||
+            raw.contains("数量词") || raw.contains("数量詞") ||
+            raw.contains("noun", ignoreCase = true) || raw.equals("n", ignoreCase = true) -> "NOUN"
+
+        // 13. Phrases / Idioms
+        raw.contains("連語") || raw.contains("连语") ||
+            raw.contains("慣用句") || raw.contains("惯用句") ||
+            raw.contains("慣用語") || raw.contains("惯用语") ||
+            raw.contains("熟語") || raw.contains("熟语") ||
+            raw.contains("成語") || raw.contains("成语") ||
+            raw.contains("短语") || raw.contains("短語") ||
+            raw.contains("词组") || raw.contains("詞組") ||
+            raw.contains("phrase", ignoreCase = true) || raw.contains("idiom", ignoreCase = true) -> "PHRASE"
+
         else -> "OTHER"
     }
 }

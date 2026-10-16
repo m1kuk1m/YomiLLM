@@ -53,7 +53,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.magnifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -136,11 +137,14 @@ fun SegmentedControl(
 fun ImageCropReviewLayout(
     originalBitmap: Bitmap,
     captureDeviceOrientation: DeviceOrientation,
+    cameraMode: String = "direct_analysis",
+    batchCount: Int = 0,
     ocrBoxDetectionSettings: OcrBoxDetectionSettings = OcrBoxDetectionSettings.DEFAULT,
     autoDeskewAfterCapture: Boolean = false,
     initialDeskewOutcome: DeskewOutcome = DeskewOutcome.Disabled,
     uiPreferencesRepository: com.example.japanesegrammarapp.domain.repository.UiPreferencesRepository,
     onCancel: () -> Unit,
+    onConfirmNext: ((Bitmap) -> Unit)? = null,
     onConfirm: (Bitmap) -> Unit
 ) {
     val context = LocalContext.current
@@ -226,8 +230,12 @@ fun ImageCropReviewLayout(
     }
 
     var interactionMode by remember { 
-        val defaultStr = uiPreferencesRepository.getCropInteraction(CropInteraction.AREA_CROP.name)
-        val defaultMode = try { CropInteraction.valueOf(defaultStr) } catch(e: Exception) { CropInteraction.AREA_CROP }
+        val defaultMode = if (cameraMode == "text_input") {
+            CropInteraction.TEXT_SELECT
+        } else {
+            val defaultStr = uiPreferencesRepository.getCropInteraction(CropInteraction.AREA_CROP.name)
+            try { CropInteraction.valueOf(defaultStr) } catch(e: Exception) { CropInteraction.AREA_CROP }
+        }
         mutableStateOf(defaultMode) 
     }
     var textSelectStart by remember { mutableStateOf<TextHandleState?>(null) }
@@ -235,6 +243,7 @@ fun ImageCropReviewLayout(
     var magnifierPosition by remember { mutableStateOf<Offset?>(null) }
     var magnifierSource by remember { mutableStateOf<Offset?>(null) }
     var isDragging by remember { mutableStateOf(false) }
+    var activeDraggingHandle by remember { mutableStateOf<String?>(null) }
     var workspaceSize by remember { mutableStateOf(IntSize.Zero) }
 
     LaunchedEffect(configuration.orientation, cropState, workspaceSize) {
@@ -557,12 +566,14 @@ fun ImageCropReviewLayout(
                                                         textSelectStart = TextHandleState(closestIdx, 0f)
                                                         textSelectEnd = TextHandleState(closestIdx, 1f)
                                                         activeTextHandle = null
+                                                        activeDraggingHandle = null
                                                     }
                                                 } else {
                                                     tapAction = {
                                                         textSelectStart = null
                                                         textSelectEnd = null
                                                         activeTextHandle = null
+                                                        activeDraggingHandle = null
                                                     }
                                                 }
                                             }
@@ -726,6 +737,7 @@ fun ImageCropReviewLayout(
                                             magnifierPosition = null
                                             magnifierSource = null
                                             isDragging = false
+                                            activeDraggingHandle = null
                                             if (isEditing) {
                                                 if (interactionMode == CropInteraction.AREA_CROP) {
                                                     cropState.stopDrag()
@@ -788,6 +800,7 @@ fun ImageCropReviewLayout(
                                                     isEditing = true
                                                     isDragging = true
                                                     magnifierPosition = currentPos
+                                                    activeDraggingHandle = activeTextHandle
                                                     
                                                     val otherHandle = if (activeTextHandle == "START") textSelectEnd else textSelectStart
                                                     val targetOrientationIsVertical = otherHandle?.let {
@@ -908,6 +921,7 @@ fun ImageCropReviewLayout(
                                                             textSelectEnd = candidateState
                                                         }
                                                     }
+                                                    activeDraggingHandle = activeTextHandle
 
                                                     // Magnifier source tracks text cursor
                                                     val finalHandle = if (activeTextHandle == "START") textSelectStart!! else textSelectEnd!!
@@ -1058,6 +1072,38 @@ fun ImageCropReviewLayout(
                                         cornerRadius = radius,
                                         style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())
                                     )
+                                }
+
+                                if (isDragging && activeDraggingHandle != null) {
+                                    val activeHandle = if (activeDraggingHandle == "START") textSelectStart else textSelectEnd
+                                    val activeBox = activeHandle?.let { detectedBoxes.getOrNull(it.index) }
+                                    if (activeHandle != null && activeBox != null) {
+                                        val isVertical = activeBox.height() > activeBox.width()
+                                        val cursorStroke = 2.dp.toPx()
+                                        if (isVertical) {
+                                            val y = cropState.imgOffsetY + (activeBox.top + activeBox.height() * activeHandle.offsetRatio) * cropState.scaleFactor
+                                            val startX = cropState.imgOffsetX + activeBox.left * cropState.scaleFactor
+                                            val endX = cropState.imgOffsetX + activeBox.right * cropState.scaleFactor
+                                            drawLine(
+                                                color = KuriAmber.copy(alpha = 0.95f),
+                                                start = Offset(startX, y),
+                                                end = Offset(endX, y),
+                                                strokeWidth = cursorStroke,
+                                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                            )
+                                        } else {
+                                            val x = cropState.imgOffsetX + (activeBox.left + activeBox.width() * activeHandle.offsetRatio) * cropState.scaleFactor
+                                            val startY = cropState.imgOffsetY + activeBox.top * cropState.scaleFactor
+                                            val endY = cropState.imgOffsetY + activeBox.bottom * cropState.scaleFactor
+                                            drawLine(
+                                                color = KuriAmber.copy(alpha = 0.95f),
+                                                start = Offset(x, startY),
+                                                end = Offset(x, endY),
+                                                strokeWidth = cursorStroke,
+                                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                            )
+                                        }
+                                    }
                                 }
                                 
                                 val drawTeardrop = { handle: TextHandleState, isStart: Boolean -> 
@@ -1426,6 +1472,139 @@ fun ImageCropReviewLayout(
                         }
                     }
                 }
+
+                if (interactionMode == CropInteraction.TEXT_SELECT &&
+                    isDragging &&
+                    magnifierPosition != null &&
+                    magnifierSource != null &&
+                    textSelectStart != null &&
+                    textSelectEnd != null
+                ) {
+                    val localPos = magnifierPosition!!
+                    val localSource = magnifierSource!!
+                    val activeHandleForLens = if (activeDraggingHandle == "START") textSelectStart else textSelectEnd
+                    val activeBoxForLens = activeHandleForLens?.let { detectedBoxes.getOrNull(it.index) }
+                    val isVerticalLens = activeBoxForLens?.let { it.height() > it.width() } ?: false
+                    val lensWidth = if (isVerticalLens) 56.dp else 120.dp
+                    val lensHeight = if (isVerticalLens) 120.dp else 56.dp
+                    val lensWidthPx = with(density) { lensWidth.toPx() }
+                    val lensHeightPx = with(density) { lensHeight.toPx() }
+                    val offsetAboveFingerPx = with(density) { (if (isVerticalLens) 122.dp else 90.dp).toPx() }
+                    val marginPx = with(density) { 8.dp.toPx() }
+
+                    val rawCenterX = localPos.x
+                    val rawCenterY = if (localPos.y - offsetAboveFingerPx - lensHeightPx / 2f < marginPx) {
+                        localPos.y + offsetAboveFingerPx
+                    } else {
+                        localPos.y - offsetAboveFingerPx
+                    }
+
+                    val minX = marginPx
+                    val maxX = (workspaceSize.width.toFloat() - lensWidthPx - marginPx).coerceAtLeast(minX)
+                    val minY = marginPx
+                    val maxY = (workspaceSize.height.toFloat() - lensHeightPx - marginPx).coerceAtLeast(minY)
+
+                    val clampedX = (rawCenterX - lensWidthPx / 2f).coerceIn(minX, maxX)
+                    val clampedY = (rawCenterY - lensHeightPx / 2f).coerceIn(minY, maxY)
+
+                    Box(
+                        modifier = Modifier
+                            .graphicsLayer {
+                                translationX = clampedX
+                                translationY = clampedY
+                            }
+                            .size(lensWidth, lensHeight)
+                            .shadow(
+                                elevation = 8.dp,
+                                shape = RoundedCornerShape(28.dp),
+                                clip = false
+                            )
+                            .background(Color(0xFF1E1E1E), RoundedCornerShape(28.dp))
+                            .border(BorderStroke(2.dp, Color.White), RoundedCornerShape(28.dp))
+                            .clip(RoundedCornerShape(28.dp))
+                    ) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val lensCenter = Offset(size.width / 2f, size.height / 2f)
+                            withTransform({
+                                translate(lensCenter.x, lensCenter.y)
+                                scale(1.5f, 1.5f, pivot = Offset.Zero)
+                                translate(-localSource.x, -localSource.y)
+                            }) {
+                                // 1. Draw base image
+                                withTransform({
+                                    translate(
+                                        cropState.imgOffsetX + cropState.imgDispWidth / 2f,
+                                        cropState.imgOffsetY + cropState.imgDispHeight / 2f
+                                    )
+                                    rotate(cropState.visualRotationAngle, pivot = Offset.Zero)
+                                    translate(-cropState.imgDispWidth / 2f, -cropState.imgDispHeight / 2f)
+                                }) {
+                                    drawImage(
+                                        image = imageBitmap,
+                                        dstOffset = IntOffset.Zero,
+                                        dstSize = IntSize(cropState.imgDispWidth.toInt(), cropState.imgDispHeight.toInt())
+                                    )
+                                }
+
+                                // 2. Draw selection highlights (slicedBoxes)
+                                val (orderedStart, orderedEnd) = getOrderedHandles(textSelectStart!!, textSelectEnd!!)
+                                val slicedBoxes = calculateSubLineRects(detectedBoxes, orderedStart, orderedEnd)
+                                slicedBoxes.forEach { box ->
+                                    val displayLeft = cropState.imgOffsetX + box.left * cropState.scaleFactor
+                                    val displayTop = cropState.imgOffsetY + box.top * cropState.scaleFactor
+                                    val displayRight = cropState.imgOffsetX + box.right * cropState.scaleFactor
+                                    val displayBottom = cropState.imgOffsetY + box.bottom * cropState.scaleFactor
+
+                                    val radius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                                    drawRoundRect(
+                                        color = KuriAmber.copy(alpha = 0.25f),
+                                        topLeft = Offset(displayLeft, displayTop),
+                                        size = Size(displayRight - displayLeft, displayBottom - displayTop),
+                                        cornerRadius = radius
+                                    )
+                                    drawRoundRect(
+                                        color = KuriAmber.copy(alpha = 0.8f),
+                                        topLeft = Offset(displayLeft, displayTop),
+                                        size = Size(displayRight - displayLeft, displayBottom - displayTop),
+                                        cornerRadius = radius,
+                                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())
+                                    )
+                                }
+
+                                // 3. Draw cursor line at the active cut position
+                                val activeHandle = if (activeDraggingHandle == "START") textSelectStart else textSelectEnd
+                                val activeBox = activeHandle?.let { detectedBoxes.getOrNull(it.index) }
+                                if (activeHandle != null && activeBox != null) {
+                                    val isVertical = activeBox.height() > activeBox.width()
+                                    val cursorStroke = 2.dp.toPx()
+                                    if (isVertical) {
+                                        val y = cropState.imgOffsetY + (activeBox.top + activeBox.height() * activeHandle.offsetRatio) * cropState.scaleFactor
+                                        val startX = cropState.imgOffsetX + activeBox.left * cropState.scaleFactor
+                                        val endX = cropState.imgOffsetX + activeBox.right * cropState.scaleFactor
+                                        drawLine(
+                                            color = KuriAmber.copy(alpha = 0.95f),
+                                            start = Offset(startX, y),
+                                            end = Offset(endX, y),
+                                            strokeWidth = cursorStroke,
+                                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                        )
+                                    } else {
+                                        val x = cropState.imgOffsetX + (activeBox.left + activeBox.width() * activeHandle.offsetRatio) * cropState.scaleFactor
+                                        val startY = cropState.imgOffsetY + activeBox.top * cropState.scaleFactor
+                                        val endY = cropState.imgOffsetY + activeBox.bottom * cropState.scaleFactor
+                                        drawLine(
+                                            color = KuriAmber.copy(alpha = 0.95f),
+                                            start = Offset(x, startY),
+                                            end = Offset(x, endY),
+                                            strokeWidth = cursorStroke,
+                                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1458,36 +1637,9 @@ fun ImageCropReviewLayout(
                 }
             }
             
-        val offsetPx = with(androidx.compose.ui.platform.LocalDensity.current) { 100.dp.toPx() }
-        val parentWidth = constraints.maxWidth.toFloat()
-        val parentHeight = constraints.maxHeight.toFloat()
-
-        val toParent = { local: androidx.compose.ui.geometry.Offset ->
-            when (captureDeviceOrientation) {
-                DeviceOrientation.LANDSCAPE_LEFT -> androidx.compose.ui.geometry.Offset(parentWidth - local.y, local.x)
-                DeviceOrientation.LANDSCAPE_RIGHT -> androidx.compose.ui.geometry.Offset(local.y, parentHeight - local.x)
-                else -> local
-            }
-        }
-
         Box(
             contentAlignment = Alignment.Center, 
-            modifier = Modifier
-                .fillMaxSize()
-                .run {
-                    if (magnifierPosition != null) {
-                        val localPos = magnifierPosition
-                        val localSource = magnifierSource
-                        if (localPos != null) {
-                            val localCenter = androidx.compose.ui.geometry.Offset(localPos.x, localPos.y - offsetPx)
-                            this.magnifier(
-                                sourceCenter = { localSource?.let { toParent(it) } ?: androidx.compose.ui.geometry.Offset.Unspecified },
-                                magnifierCenter = { toParent(localCenter) },
-                                zoom = 1.5f
-                            )
-                        } else this
-                    } else this
-                }
+            modifier = Modifier.fillMaxSize()
         ) {
             WorkspaceArea(
                 modifier = workspaceModifier
@@ -1572,69 +1724,182 @@ fun ImageCropReviewLayout(
                     }
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    androidx.compose.material3.TextButton(
-                        onClick = { onCancel() },
-                        shape = RoundedCornerShape(28.dp),
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
-                        modifier = Modifier.weight(1f).height(56.dp)
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.camera_cancel_desc), modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.camera_recapture_btn), fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    }
-                    
-                    Button(
-                        onClick = {
-                            if (interactionMode == CropInteraction.TEXT_SELECT) {
-                                if (detectedBoxes.isNotEmpty()) {
-                                    val startHandle = textSelectStart ?: TextHandleState(0, 0f)
-                                    val endHandle = textSelectEnd ?: TextHandleState(detectedBoxes.lastIndex, 1f)
-                                    val (orderedStart, orderedEnd) = getOrderedHandles(startHandle, endHandle)
-                                    val slicedBoxes = calculateSubLineRects(detectedBoxes, orderedStart, orderedEnd)
-                                    try {
-                                        val recomposed = MaskedCropHelper.createRecomposedBitmap(bitmap, slicedBoxes)
-                                        onConfirm(recomposed)
-                                    } catch (e: Exception) {
-                                        AppLogger.e("CAMERA", "Recomposed crop failed, fallback to masked", e)
-                                        try {
-                                            val masked = MaskedCropHelper.createMaskedBitmap(bitmap, slicedBoxes)
-                                            onConfirm(masked)
-                                        } catch (e2: Exception) {
-                                            AppLogger.e("CAMERA", "Masked crop failed", e2)
-                                            onConfirm(bitmap)
-                                        }
-                                    }
-                                } else {
-                                    onConfirm(bitmap)
-                                }
-                            } else {
-                                if (isCropCleared) {
-                                    onConfirm(bitmap)
-                                } else {
-                                    val selectedIndex = selectedOcrBoxIndex
-                                    if (!userSelectionMade && !hideOcrBoxes && selectedIndex != null && selectedIndex in detectedBoxes.indices) {
-                                        confirmOcrBox(detectedBoxes[selectedIndex])
-                                    } else {
-                                        confirmCurrentCrop()
-                                    }
+                val executeCropAction: ((Bitmap) -> Unit) -> Unit = { targetCallback ->
+                    if (interactionMode == CropInteraction.TEXT_SELECT) {
+                        if (detectedBoxes.isNotEmpty()) {
+                            val startHandle = textSelectStart ?: TextHandleState(0, 0f)
+                            val endHandle = textSelectEnd ?: TextHandleState(detectedBoxes.lastIndex, 1f)
+                            val (orderedStart, orderedEnd) = getOrderedHandles(startHandle, endHandle)
+                            val slicedBoxes = calculateSubLineRects(detectedBoxes, orderedStart, orderedEnd)
+                            try {
+                                val recomposed = MaskedCropHelper.createRecomposedBitmap(bitmap, slicedBoxes)
+                                targetCallback(recomposed)
+                            } catch (e: Exception) {
+                                AppLogger.e("CAMERA", "Recomposed crop failed, fallback to masked", e)
+                                try {
+                                    val masked = MaskedCropHelper.createMaskedBitmap(bitmap, slicedBoxes)
+                                    targetCallback(masked)
+                                } catch (e2: Exception) {
+                                    AppLogger.e("CAMERA", "Masked crop failed", e2)
+                                    targetCallback(bitmap)
                                 }
                             }
-                        },
-                        shape = RoundedCornerShape(28.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = KuriAmber,
-                            contentColor = SumiInk
-                        ),
-                        modifier = Modifier.weight(1f).height(56.dp)
+                        } else {
+                            targetCallback(bitmap)
+                        }
+                    } else {
+                        if (isCropCleared) {
+                            targetCallback(bitmap)
+                        } else {
+                            val selectedIndex = selectedOcrBoxIndex
+                            if (!userSelectionMade && !hideOcrBoxes && selectedIndex != null && selectedIndex in detectedBoxes.indices) {
+                                val box = detectedBoxes[selectedIndex]
+                                val x = box.left.coerceIn(0, bitmap.width)
+                                val y = box.top.coerceIn(0, bitmap.height)
+                                val w = minOf(bitmap.width - x, box.width())
+                                val h = minOf(bitmap.height - y, box.height())
+                                if (w > 0 && h > 0) {
+                                    try {
+                                        targetCallback(Bitmap.createBitmap(bitmap, x, y, w, h))
+                                    } catch (e: Throwable) {
+                                        targetCallback(bitmap)
+                                    }
+                                } else {
+                                    targetCallback(bitmap)
+                                }
+                            } else {
+                                val l = ((cropState.cropLeft - cropState.imgOffsetX) / cropState.scaleFactor).toInt().coerceIn(0, bitmap.width)
+                                val t = ((cropState.cropTop - cropState.imgOffsetY) / cropState.scaleFactor).toInt().coerceIn(0, bitmap.height)
+                                val r = ((cropState.cropRight - cropState.imgOffsetX) / cropState.scaleFactor).toInt().coerceIn(0, bitmap.width)
+                                val b = ((cropState.cropBottom - cropState.imgOffsetY) / cropState.scaleFactor).toInt().coerceIn(0, bitmap.height)
+                                val w = r - l
+                                val h = b - t
+                                if (w > 0 && h > 0) {
+                                    try {
+                                        targetCallback(Bitmap.createBitmap(bitmap, l, t, w, h))
+                                    } catch (e: Throwable) {
+                                        targetCallback(bitmap)
+                                    }
+                                } else {
+                                    targetCallback(bitmap)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (cameraMode == "text_input") {
+                    if (batchCount > 0) {
+                        Surface(
+                            color = Color.White.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.camera_batch_count, batchCount),
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Check, contentDescription = stringResource(R.string.camera_confirm_desc), modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.camera_confirm_btn), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        androidx.compose.material3.TextButton(
+                            onClick = { onCancel() },
+                            shape = RoundedCornerShape(24.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color.White.copy(alpha = 0.85f)),
+                            modifier = Modifier.weight(0.8f).height(50.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.camera_recapture_btn),
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+
+                        if (onConfirmNext != null) {
+                            OutlinedButton(
+                                onClick = { executeCropAction(onConfirmNext) },
+                                shape = RoundedCornerShape(24.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.6f)),
+                                modifier = Modifier.weight(1.55f).height(50.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.camera_capture_next),
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = { executeCropAction(onConfirm) },
+                            shape = RoundedCornerShape(24.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = KuriAmber,
+                                contentColor = SumiInk
+                            ),
+                            modifier = Modifier.weight(0.85f).height(50.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.camera_capture_done),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        androidx.compose.material3.TextButton(
+                            onClick = { onCancel() },
+                            shape = RoundedCornerShape(28.dp),
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                            modifier = Modifier.weight(1f).height(56.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.camera_cancel_desc), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.camera_recapture_btn), fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        }
+
+                        Button(
+                            onClick = { executeCropAction(onConfirm) },
+                            shape = RoundedCornerShape(28.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = KuriAmber,
+                                contentColor = SumiInk
+                            ),
+                            modifier = Modifier.weight(1f).height(56.dp)
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = stringResource(R.string.camera_confirm_desc), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.camera_confirm_btn), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        }
                     }
                 }
             }

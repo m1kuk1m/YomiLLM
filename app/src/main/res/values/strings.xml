@@ -41,6 +41,16 @@
     <string name="workspace_short_title">WORKSPACE</string>
     <string name="input_hint_elegant">Enter text here...</string>
     <string name="camera">Camera</string>
+    <string name="photo_input_camera">Photo Text Input</string>
+    <string name="direct_image_analysis">Direct Image Analysis</string>
+    <string name="camera_capture_next">Capture Next</string>
+    <string name="camera_capture_done">Done</string>
+    <string name="camera_batch_count">%1$d photos captured</string>
+    <string name="photo_input_status_recognizing">Recognizing photo %1$d/%2$d...</string>
+    <string name="photo_input_status_typing">Typing text...</string>
+    <string name="photo_input_skip">Skip Animation</string>
+    <string name="photo_input_cancel">Cancel</string>
+    <string name="photo_input_failed">Recognition failed, fallback used</string>
     <string name="album">Album</string>
     <string name="start_parse">Start Parse</string>
 
@@ -778,5 +788,32 @@
     <string name="deck_sync_stop_service">Stop</string>
     <string name="deck_sync_notif_title">Steam Deck Screenshot Received</string>
     <string name="deck_sync_notif_desc">Tap to crop subtitles and parse Japanese grammar</string>
+
+    <!-- Settings Reorganization & Status Summaries -->
+    <string name="settings_group_overview">Overview &amp; Study</string>
+    <string name="settings_group_ai_core">AI &amp; Core Analysis</string>
+    <string name="settings_group_experience">General &amp; Appearance</string>
+    <string name="settings_group_device_advanced">Device Sync &amp; Advanced</string>
+    <string name="settings_statistics_subtitle">Study streak, analyzed sentences, and review</string>
+    <string name="settings_appearance_theme_group">Theme &amp; Background</string>
+    <string name="settings_general_language_group">Interface &amp; Language</string>
+    <string name="settings_general_workflow_group">Workflow &amp; Automation</string>
+    <string name="settings_ocr_basic_group">Scanning &amp; Recognition Engines</string>
+    <string name="settings_ocr_advanced_group">Advanced Parameter Tuning</string>
+    <string name="settings_llm_group_model">Models &amp; Reasoning</string>
+    <string name="settings_llm_group_failover">Failover &amp; Reliability</string>
+    <string name="settings_llm_group_prompts_usage">Prompts &amp; Token Usage</string>
+    <string name="settings_tts_group_config">Provider &amp; Credentials</string>
+    <string name="settings_tts_group_voice">Voice &amp; Model Parameters</string>
+    <string name="settings_advanced_logs_group">Diagnostics &amp; Developer Logs</string>
+    <string name="provider_badge_main">Active</string>
+    <string name="provider_badge_backup">Backup</string>
+    <string name="provider_summary_configured">%1$d active endpoint(s) · %2$d model(s)</string>
+    <string name="provider_summary_unconfigured">No active endpoints · %1$d model(s)</string>
+    <string name="tts_key_configured">Key configured</string>
+    <string name="tts_key_not_configured">Key not set</string>
+    <string name="ocr_status_enabled">Local OCR On</string>
+    <string name="ocr_status_disabled">Direct AI Vision</string>
+    <string name="advanced_summary_subtitle">API debug responses and developer logs</string>
 </resources>
 

@@ -55,11 +55,11 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.vector.ImageVector
 
 enum class SettingsCategory(val titleRes: Int, val icon: ImageVector) {
-    APPEARANCE(R.string.appearance, Icons.Default.Palette),
-    GENERAL(R.string.general, Icons.Default.Settings),
-    OCR_SCANNING(R.string.ocr_scanning, Icons.Default.DocumentScanner),
     LLM_API(R.string.llm_prompts, Icons.Default.VpnKey),
+    OCR_SCANNING(R.string.ocr_scanning, Icons.Default.DocumentScanner),
     TTS(R.string.tts_settings_title, Icons.Default.RecordVoiceOver),
+    GENERAL(R.string.general, Icons.Default.Settings),
+    APPEARANCE(R.string.appearance, Icons.Default.Palette),
     STEAM_DECK(R.string.steam_deck_companion, Icons.Default.SportsEsports),
     ADVANCED(R.string.advanced_debug, Icons.Default.BugReport)
 }
@@ -503,29 +503,216 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     if (targetCategory == null) {
-                        SettingsGroup(title = stringResource(R.string.settings_title)) {
+                        // Group 1: 数据与学习
+                        SettingsGroup(title = stringResource(R.string.settings_group_overview)) {
                             SettingsItem(
                                 icon = Icons.Default.BarChart,
                                 title = stringResource(R.string.statistics_title),
+                                subtitle = stringResource(R.string.settings_statistics_subtitle),
                                 onClick = { navController.navigate("statistics") },
                                 trailingContent = {
-                                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = null, tint = SumiInk.copy(alpha = 0.4f))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (totalTokensConsumed > 0) {
+                                            SettingsValueBadge(
+                                                text = "${String.format(java.util.Locale.US, "%,d", totalTokensConsumed)} tkn"
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                        }
+                                        Icon(
+                                            Icons.Default.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            tint = SumiInk.copy(alpha = 0.4f)
+                                        )
+                                    }
                                 }
                             )
-                            SettingsRootDivider()
-                            SettingsCategory.entries.forEachIndexed { index, category ->
-                                SettingsItem(
-                                    icon = category.icon,
-                                    title = stringResource(category.titleRes),
-                                    onClick = { currentCategory = category },
-                                    trailingContent = {
-                                        Icon(Icons.Default.KeyboardArrowRight, contentDescription = null, tint = SumiInk.copy(alpha = 0.4f))
+                        }
+
+                        // Group 2: AI 与核心解析
+                        SettingsGroup(title = stringResource(R.string.settings_group_ai_core)) {
+                            val activeModelText = uiState.activeModel.ifBlank { stringResource(R.string.unselected) }
+                            SettingsItem(
+                                icon = SettingsCategory.LLM_API.icon,
+                                title = stringResource(SettingsCategory.LLM_API.titleRes),
+                                subtitle = "${uiState.activeProvider} · $activeModelText",
+                                onClick = { currentCategory = SettingsCategory.LLM_API },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        SettingsValueBadge(text = uiState.activeProvider, highlighted = true)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Default.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            tint = SumiInk.copy(alpha = 0.4f)
+                                        )
                                     }
-                                )
-                                if (index < SettingsCategory.entries.lastIndex) {
-                                    SettingsRootDivider()
                                 }
+                            )
+
+                            SettingsDivider()
+
+                            val ocrEngineLabel = ocrBoxDetectorEngineLabel(uiState.ocrBoxDetectionSettings.detectorEngine)
+                            val ocrSubtitle = if (uiState.useOcr) {
+                                "${stringResource(R.string.ocr_status_enabled)} · $ocrEngineLabel"
+                            } else {
+                                "${stringResource(R.string.ocr_status_disabled)} · $ocrEngineLabel"
                             }
+                            SettingsItem(
+                                icon = SettingsCategory.OCR_SCANNING.icon,
+                                title = stringResource(SettingsCategory.OCR_SCANNING.titleRes),
+                                subtitle = ocrSubtitle,
+                                onClick = { currentCategory = SettingsCategory.OCR_SCANNING },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        SettingsValueBadge(
+                                            text = if (uiState.useOcr) {
+                                                stringResource(R.string.ocr_status_enabled)
+                                            } else {
+                                                stringResource(R.string.ocr_status_disabled)
+                                            },
+                                            highlighted = uiState.useOcr
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Default.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            tint = SumiInk.copy(alpha = 0.4f)
+                                        )
+                                    }
+                                }
+                            )
+
+                            SettingsDivider()
+
+                            val ttsKeyConfigured = uiState.ttsKeys[selectedTtsProvider]?.isNotBlank() == true
+                            val ttsKeyStatus = if (ttsKeyConfigured) {
+                                stringResource(R.string.tts_key_configured)
+                            } else {
+                                stringResource(R.string.tts_key_not_configured)
+                            }
+                            SettingsItem(
+                                icon = SettingsCategory.TTS.icon,
+                                title = stringResource(SettingsCategory.TTS.titleRes),
+                                subtitle = "$selectedTtsProvider · $ttsKeyStatus",
+                                onClick = { currentCategory = SettingsCategory.TTS },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        SettingsValueBadge(
+                                            text = selectedTtsProvider,
+                                            highlighted = ttsKeyConfigured
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Default.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            tint = SumiInk.copy(alpha = 0.4f)
+                                        )
+                                    }
+                                }
+                            )
+                        }
+
+                        // Group 3: 常规与外观
+                        SettingsGroup(title = stringResource(R.string.settings_group_experience)) {
+                            val langDisplay = if (currentLangLabel == "AUTO") {
+                                stringResource(R.string.language_auto)
+                            } else {
+                                currentLangLabel
+                            }
+                            val autoNavSummary = if (uiState.autoNavigateResult) {
+                                stringResource(R.string.auto_navigate_result)
+                            } else {
+                                stringResource(R.string.silent_background_mode)
+                            }
+                            SettingsItem(
+                                icon = SettingsCategory.GENERAL.icon,
+                                title = stringResource(SettingsCategory.GENERAL.titleRes),
+                                subtitle = "$langDisplay · $autoNavSummary",
+                                onClick = { currentCategory = SettingsCategory.GENERAL },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        SettingsValueBadge(text = langDisplay)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Default.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            tint = SumiInk.copy(alpha = 0.4f)
+                                        )
+                                    }
+                                }
+                            )
+
+                            SettingsDivider()
+
+                            val themeDisplay = when (uiState.themeMode) {
+                                "Light" -> stringResource(R.string.theme_light)
+                                "Dark" -> stringResource(R.string.theme_dark)
+                                else -> stringResource(R.string.theme_system)
+                            }
+                            val cardScalePercent = "${(uiState.cardFontSizeScale * 100).toInt()}%"
+                            SettingsItem(
+                                icon = SettingsCategory.APPEARANCE.icon,
+                                title = stringResource(SettingsCategory.APPEARANCE.titleRes),
+                                subtitle = "$themeDisplay · $cardScalePercent",
+                                onClick = { currentCategory = SettingsCategory.APPEARANCE },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        SettingsValueBadge(text = themeDisplay)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Default.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            tint = SumiInk.copy(alpha = 0.4f)
+                                        )
+                                    }
+                                }
+                            )
+                        }
+
+                        // Group 4: 设备联动与高级
+                        SettingsGroup(title = stringResource(R.string.settings_group_device_advanced)) {
+                            val deckSubtitle = if (uiState.isDeckSyncServiceRunning) {
+                                val ip = uiState.deckSyncIpAddress.ifBlank { "127.0.0.1" }
+                                "${stringResource(R.string.deck_sync_status_running)} ($ip:${uiState.deckSyncSettings.port})"
+                            } else {
+                                stringResource(R.string.deck_sync_status_stopped)
+                            }
+                            SettingsItem(
+                                icon = SettingsCategory.STEAM_DECK.icon,
+                                title = stringResource(SettingsCategory.STEAM_DECK.titleRes),
+                                subtitle = deckSubtitle,
+                                onClick = { currentCategory = SettingsCategory.STEAM_DECK },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        SettingsValueBadge(
+                                            text = if (uiState.isDeckSyncServiceRunning) "ON" else "OFF",
+                                            highlighted = uiState.isDeckSyncServiceRunning
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Default.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            tint = SumiInk.copy(alpha = 0.4f)
+                                        )
+                                    }
+                                }
+                            )
+
+                            SettingsDivider()
+
+                            SettingsItem(
+                                icon = SettingsCategory.ADVANCED.icon,
+                                title = stringResource(SettingsCategory.ADVANCED.titleRes),
+                                subtitle = stringResource(R.string.advanced_summary_subtitle),
+                                onClick = { currentCategory = SettingsCategory.ADVANCED },
+                                trailingContent = {
+                                    Icon(
+                                        Icons.Default.KeyboardArrowRight,
+                                        contentDescription = null,
+                                        tint = SumiInk.copy(alpha = 0.4f)
+                                    )
+                                }
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(40.dp))
@@ -541,7 +728,6 @@ fun SettingsScreen(
                                         android.widget.Toast.makeText(ctx, ctx.getString(R.string.clear_wallpaper_toast), android.widget.Toast.LENGTH_SHORT).show()
                                     }
                                 )
-                                Spacer(modifier = Modifier.height(16.dp))
                                 SettingsCardAppearanceSection(
                                     uiState = uiState,
                                     onFontSizeScaleChange = viewModel::setCardFontSizeScale,
@@ -569,30 +755,16 @@ fun SettingsScreen(
                                     onOcrBoxDetectorEngineChange = viewModel::setOcrBoxDetectorEngine,
                                     onTextSelectEngineChange = viewModel::setTextSelectEngine,
                                     onAutoDeskewAfterCaptureChange = viewModel::setAutoDeskewAfterCapture,
-                                    onImageTokenizerModeChange = viewModel::setImageTokenizerMode,
                                     onShowOcrDebug = { showOcrDebugDialog = true }
                                 )
                             }
                             SettingsCategory.LLM_API -> {
-                                SettingsLlmPromptsSection(
-                                    totalTokensConsumed = totalTokensConsumed,
-                                    onShowTokenDialog = { showTokenDialog = true },
-                                    onShowPromptEditor = { showPromptEditor = true }
-                                )
-
-                                SettingsApiPrioritySection(
+                                SettingsApiModelSection(
                                     uiState = uiState,
                                     providers = providers,
                                     providerModels = providerModels,
                                     onActiveProviderChange = viewModel::setActiveProvider,
                                     onActiveModelChange = viewModel::setActiveModel,
-                                    onBackupProviderChange = viewModel::setBackupProvider,
-                                    onBackupModelChange = viewModel::setBackupModel,
-                                    onUseBackupApiChange = viewModel::setUseBackupApi,
-                                    onAutoRetryOnErrorChange = viewModel::setAutoRetryOnError,
-                                    onFailoverToNextEndpointChange = viewModel::setFailoverToNextEndpoint,
-                                    onReasoningLevelChange = viewModel::setReasoningLevel,
-                                    onComponentReasoningLevelChange = viewModel::setComponentReasoningLevel,
                                     onOpenCotDialog = { showCotDepthDialog = true },
                                     onOpenComponentModelDialog = { showComponentModelDialog = true }
                                 )
@@ -619,15 +791,31 @@ fun SettingsScreen(
                                     },
                                     onAddCustomModel = viewModel::saveModelsForProvider
                                 )
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                SettingsApiFailoverSection(
+                                    uiState = uiState,
+                                    providers = providers,
+                                    providerModels = providerModels,
+                                    onBackupProviderChange = viewModel::setBackupProvider,
+                                    onBackupModelChange = viewModel::setBackupModel,
+                                    onUseBackupApiChange = viewModel::setUseBackupApi,
+                                    onAutoRetryOnErrorChange = viewModel::setAutoRetryOnError,
+                                    onFailoverToNextEndpointChange = viewModel::setFailoverToNextEndpoint
+                                )
+
+                                val activePresetName = uiState.promptPresets
+                                    .find { it.id == uiState.activePromptPresetId }
+                                    ?.name
+                                SettingsLlmPromptsSection(
+                                    totalTokensConsumed = totalTokensConsumed,
+                                    activePresetName = activePresetName,
+                                    onShowTokenDialog = { showTokenDialog = true },
+                                    onShowPromptEditor = { showPromptEditor = true }
+                                )
                             }
                             SettingsCategory.TTS -> {
-                                Text(
-                                    text = stringResource(R.string.tts_settings_title),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = SumiInk,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(start = 8.dp, bottom = 8.dp, top = 16.dp)
-                                )
                                 SettingsTtsSection(
                                     selectedTtsProvider = selectedTtsProvider,
                                     onSelectedTtsProviderChange = { selectedTtsProvider = it },
@@ -665,7 +853,8 @@ fun SettingsScreen(
                             SettingsCategory.ADVANCED -> {
                                 SettingsAdvancedSection(
                                     onShowApiLogs = { showApiLogsDialog = true },
-                                    onShowAppLogs = { showLogsDialog = true }
+                                    onShowAppLogs = { showLogsDialog = true },
+                                    onShowOcrDebug = { showOcrDebugDialog = true }
                                 )
                             }
                         }
@@ -1055,10 +1244,4 @@ fun SettingsScreen(
     }
 
     }
-}
-
-@Composable
-private fun SettingsRootDivider() {
-    val sumiInk = MaterialTheme.colorScheme.onBackground
-    Divider(color = sumiInk.copy(alpha = 0.05f), modifier = Modifier.padding(horizontal = 16.dp))
 }

@@ -10,4 +10,6 @@ interface UiPreferencesRepository {
     fun saveLastDictionary(dictionary: String)
     fun getCropInteraction(defaultValue: String): String
     fun saveCropInteraction(mode: String)
+    fun getWorkspaceMediaButtonOrder(defaultValue: String = "PHOTO_INPUT,CAMERA,ALBUM"): String = defaultValue
+    fun saveWorkspaceMediaButtonOrder(order: String) {}
 }

@@ -8,6 +8,8 @@ import com.example.japanesegrammarapp.domain.model.AnalysisModule
 import com.example.japanesegrammarapp.domain.model.DetailedAnalysisResult
 import com.example.japanesegrammarapp.domain.model.TokenizationResult
 import com.example.japanesegrammarapp.domain.model.WordSegment
+import com.example.japanesegrammarapp.domain.model.isPunctuationToken
+import com.example.japanesegrammarapp.domain.model.PUNCTUATION_CHARS
 import com.example.japanesegrammarapp.domain.repository.SettingsRepository
 import com.example.japanesegrammarapp.utils.AppLogger
 import com.google.gson.Gson
@@ -32,7 +34,8 @@ class LlmAnalysisServiceImpl @Inject constructor(
             '。', '、', '・', '？', '！', '「', '」', '『', '』', '（', '）',
             '〔', '〕', '［', '］', '｛', '｝', '〜', '～', '…', '：', '；',
             '―', '—', '【', '】', '《', '》', '〈', '〉', '〝', '〟',
-            '?', '!', '(', ')', '[', ']', '{', '}', ':', ';'
+            '?', '!', '(', ')', '[', ']', '{', '}', ':', ';',
+            '‼', '⁉', '⁇', '⁈', '〰'
         )
         val THINKING_REGEX = Regex("<think>([\\s\\S]*?)(?:</think>|$)", RegexOption.DOT_MATCHES_ALL)
     }
@@ -264,7 +267,7 @@ class LlmAnalysisServiceImpl @Inject constructor(
         recordId: Int?,
         stepName: String?
     ): Flow<Pair<DetailedAnalysisResult?, LlmResultMetadata>> = flow {
-        val nonPunctuationTokens = tokens.filter { !isPunctuation(it) }
+        val nonPunctuationTokens = tokens.filter { !isPunctuationToken(it) }
 
         if (nonPunctuationTokens.isEmpty()) {
             val finalSegments = tokens.map { getPunctuationSegment(it) }
@@ -321,22 +324,7 @@ class LlmAnalysisServiceImpl @Inject constructor(
             }
 
             val returnedSegments = segments
-            var returnedIdx = 0
-            val finalSegments = mutableListOf<WordSegment>()
-
-            for (token in tokens) {
-                if (token.isBlank()) continue
-                if (isPunctuation(token)) {
-                    finalSegments.add(getPunctuationSegment(token))
-                } else {
-                    if (returnedIdx < returnedSegments.size) {
-                        finalSegments.add(returnedSegments[returnedIdx].copy(text = token))
-                        returnedIdx++
-                    } else {
-                        finalSegments.add(WordSegment(text = token))
-                    }
-                }
-            }
+            val finalSegments = alignTokensWithSegments(tokens, returnedSegments)
             DetailedAnalysisResult(segments = finalSegments)
         }.collect {
             emit(it)
@@ -515,21 +503,13 @@ class LlmAnalysisServiceImpl @Inject constructor(
         }
     }
 
-    private fun isJapaneseChar(c: Char): Boolean {
-        val block = Character.UnicodeBlock.of(c)
-        return block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS ||
-               block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS ||
-               block == Character.UnicodeBlock.HIRAGANA ||
-               block == Character.UnicodeBlock.KATAKANA
-    }
-
     private fun normalizeTokenizerTokens(tokens: List<String>): List<String> {
         return tokens.flatMap { splitTokenizerToken(it.trim()) }.filter { it.isNotBlank() }
     }
 
     private fun splitTokenizerToken(token: String): List<String> {
         if (token.isBlank()) return emptyList()
-        if (isPunctuation(token)) return listOf(token)
+        if (isPunctuationToken(token)) return listOf(token)
 
         val parts = mutableListOf<String>()
         val buffer = StringBuilder()
@@ -575,69 +555,118 @@ class LlmAnalysisServiceImpl @Inject constructor(
         return c in TOKENIZER_BOUNDARY_PUNCTUATION_CHARS
     }
 
-    private fun isPunctuation(token: String): Boolean {
-        val trimmed = token.trim()
-        if (trimmed.isEmpty()) return true
-        val punctuationChars = setOf(
-            '。', '、', '・', '？', '！', '「', '」', '『', '』', '（', '）',
-            '〔', '〕', '［', '］', '｛', '｝', '〜', '～', '…', '：', '；', '―',
-            '【', '】', '《', '》', '〈', '〉', '〝', '〟',
-            '?', '!', '(', ')', '[', ']', '{', '}', ':', ';', ',', '.', '~', '-', '_', '/', '\\', '|', '<', '>', '"', '\''
-        )
-        if (trimmed.all { it in punctuationChars }) return true
-        if (trimmed.matches(Regex("^[wW]+$"))) return true
-        
-        return trimmed.all { c ->
-            if (c.isLetterOrDigit()) return@all false
-            val block = Character.UnicodeBlock.of(c)
-            if (isJapaneseChar(c)) return@all false
-            
-            val type = Character.getType(c).toByte()
-            type == Character.START_PUNCTUATION ||
-            type == Character.END_PUNCTUATION ||
-            type == Character.OTHER_PUNCTUATION ||
-            type == Character.CONNECTOR_PUNCTUATION ||
-            type == Character.DASH_PUNCTUATION ||
-            type == Character.INITIAL_QUOTE_PUNCTUATION ||
-            type == Character.FINAL_QUOTE_PUNCTUATION ||
-            type == Character.MATH_SYMBOL ||
-            type == Character.CURRENCY_SYMBOL ||
-            type == Character.MODIFIER_SYMBOL ||
-            type == Character.OTHER_SYMBOL ||
-            block == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION
+    private fun cleanWordForMatching(text: String?): String {
+        if (text == null) return ""
+        return text.replace(Regex("[\\s\\uFE00-\\uFE0F]"), "")
+            .trim { it in PUNCTUATION_CHARS || it.isWhitespace() }
+    }
+
+    private fun alignTokensWithSegments(
+        tokens: List<String>,
+        returnedSegments: List<WordSegment>
+    ): List<WordSegment> {
+        val finalSegments = mutableListOf<WordSegment>()
+        var returnedIdx = 0
+
+        for (i in tokens.indices) {
+            val token = tokens[i]
+            if (token.isBlank()) continue
+
+            if (isPunctuationToken(token)) {
+                finalSegments.add(getPunctuationSegment(token))
+                continue
+            }
+
+            if (returnedIdx >= returnedSegments.size) {
+                finalSegments.add(WordSegment(text = token))
+                continue
+            }
+
+            val currentReturned = returnedSegments[returnedIdx]
+            val tokenClean = cleanWordForMatching(token)
+            val returnedClean = cleanWordForMatching(currentReturned.text)
+
+            val directMatch = (token == currentReturned.text) ||
+                (tokenClean.isNotEmpty() && tokenClean == returnedClean) ||
+                (tokenClean.isNotEmpty() && (token.startsWith(returnedClean) || currentReturned.text?.startsWith(tokenClean) == true))
+
+            if (directMatch) {
+                finalSegments.add(currentReturned.copy(text = token))
+                returnedIdx++
+                continue
+            }
+
+            // Lookahead in returnedSegments (up to window of 3)
+            var matchedLookaheadIdx = -1
+            val maxLookahead = minOf(returnedSegments.size, returnedIdx + 4)
+            for (j in (returnedIdx + 1) until maxLookahead) {
+                val cand = returnedSegments[j]
+                val candClean = cleanWordForMatching(cand.text)
+                if (token == cand.text || (tokenClean.isNotEmpty() && tokenClean == candClean)) {
+                    matchedLookaheadIdx = j
+                    break
+                }
+            }
+
+            // Check if currentReturned matches a future token in tokens
+            var currentMatchesFutureToken = false
+            val maxFutureToken = minOf(tokens.size, i + 4)
+            for (k in (i + 1) until maxFutureToken) {
+                val futureTokenClean = cleanWordForMatching(tokens[k])
+                if (futureTokenClean.isNotEmpty() && futureTokenClean == returnedClean) {
+                    currentMatchesFutureToken = true
+                    break
+                }
+            }
+
+            if (matchedLookaheadIdx != -1 && !currentMatchesFutureToken) {
+                finalSegments.add(returnedSegments[matchedLookaheadIdx].copy(text = token))
+                returnedIdx = matchedLookaheadIdx + 1
+            } else if (currentMatchesFutureToken) {
+                finalSegments.add(WordSegment(text = token))
+            } else {
+                finalSegments.add(currentReturned.copy(text = token))
+                returnedIdx++
+            }
         }
+
+        return finalSegments
     }
 
     private fun getPunctuationSegment(token: String): WordSegment {
         val trimmed = token.trim()
+        val cleaned = trimmed.replace(Regex("[\uFE00-\uFE0F]"), "")
         val (reading, meaning, role) = when {
-            trimmed == "。" -> Triple("くてん", "（句号）", "文の終わりを示す句点。")
-            trimmed == "、" -> Triple("とうてん", "（逗号）", "文の区切りを示す読点。")
-            trimmed == "・" -> Triple("なかぐろ", "（间隔号）", "名詞の並列や、外来語・外国語の区切りを示す中黒。")
-            trimmed == "？" || trimmed == "?" -> Triple("ぎもんふ", "（问号）", "疑問や問いかけを表す疑問符（クエスチョンマーク）。")
-            trimmed == "！" || trimmed == "!" -> Triple("かんたんふ", "（感叹号）", "強い感情、驚き、または命令を表す感嘆符。")
-            trimmed == "「" -> Triple("かぎかっこ", "（前引号）", "会話、引用、または強調する語句の開始を示す鉤括弧。")
-            trimmed == "」" -> Triple("かぎかっこ", "（后引号）", "会話、引用、または強調する語句の終了を示す鉤括弧。")
-            trimmed == "〝" -> Triple("かぎかっこ", "（前双引号）", "引用や強調を示す二重引用符の開始（ノの字形ダブルクォーテーション）。")
-            trimmed == "〟" -> Triple("かぎかっこ", "（后双引号）", "引用や強調を示す二重引用符の終了（ノの字形ダブルクォーテーション）。")
-            trimmed == "『" -> Triple("にじゅうかぎかっこ", "（前双引号）", "書名、作品名、または鉤括弧内での引用の開始を示す二重鉤括弧。")
-            trimmed == "』" -> Triple("にじゅうかぎかっこ", "（后双引号）", "書名、作品名、または鉤括弧内での引用の終了を示す二重鉤括弧。")
-            trimmed == "（" || trimmed == "(" -> Triple("かっこ", "（前括号）", "注記、補足説明、または読み仮名の開始を示す丸括弧。")
-            trimmed == "）" || trimmed == ")" -> Triple("かっこ", "（后括号）", "注記、補足説明、または読み仮名の終了を示す丸括弧。")
-            trimmed == "【" -> Triple("すみつきかっこ", "（前方括号）", "見出し、強調、または特別な分類の開始を示す隅付き括弧。")
-            trimmed == "】" -> Triple("すみつきかっこ", "（后方括号）", "見出し、強調、または特別な分類の終了を示す隅付き括弧。")
-            trimmed == "〔" -> Triple("きっこうかっこ", "（前六角括号）", "引用内の補足、注記、または記号の開始を示す亀甲括弧。")
-            trimmed == "〕" -> Triple("きっこうかっこ", "（后六角括号）", "引用内の補足、注記、または記号の終了を示す亀甲括弧。")
-            trimmed == "［" || trimmed == "[" -> Triple("かくかっこ", "（前中括号）", "注記、編集上の挿入、またはグループ化の開始を示す角括弧。")
-            trimmed == "］" || trimmed == "]" -> Triple("かくかっこ", "（后中括号）", "注記、編集上の挿入、またはグループ化の終了を示す角括弧。")
-            trimmed == "｛" || trimmed == "{" -> Triple("なみかっこ", "（前大括号）", "複数の選択肢やグループの開始を示す波括弧。")
-            trimmed == "｝" || trimmed == "}" -> Triple("なみかっこ", "（后大括号）", "複数の選択肢やグループの終了を示す波括弧。")
-            trimmed == "〜" || trimmed == "～" || trimmed == "~" -> Triple("なみだっしゅ", "（波浪号）", "範囲（〜から〜まで）や起点を示す波ダッシュ。")
-            trimmed.isEllipsisLike() -> Triple("さんてんりーだー", "（省略号）", "言葉の省略、余韻、または沈黙を示す三点リーダー。")
-            trimmed == "：" || trimmed == ":" -> Triple("ころん", "（冒号）", "説明、例示、または引用の提示を示すコロン。")
-            trimmed == "；" || trimmed == ";" -> Triple("せみころん", "（分号）", "文の緊密な関係にある節を区切るセミコロン。")
-            trimmed == "―" || trimmed == "—" -> Triple("だっしゅ", "（破折号）", "話の転換、説明の挿入、または余韻を示すダッシュ。")
-            trimmed.matches(Regex("^[wW]+$")) -> Triple("わら", "（笑）", "ネットスラングで笑いを表す記号。")
+            cleaned == "。" -> Triple("くてん", "（句号）", "文の終わりを示す句点。")
+            cleaned == "、" -> Triple("とうてん", "（逗号）", "文の区切りを示す読点。")
+            cleaned == "・" -> Triple("なかぐろ", "（间隔号）", "名詞の並列や、外来語・外国語の区切りを示す中黒。")
+            cleaned == "？" || cleaned == "?" -> Triple("ぎもんふ", "（问号）", "疑問や問いかけを表す疑問符（クエスチョンマーク）。")
+            cleaned == "！" || cleaned == "!" -> Triple("かんたんふ", "（感叹号）", "強い感情、驚き、または命令を表す感嘆符。")
+            cleaned == "‼" || cleaned == "!!" || cleaned == "！！" -> Triple("にじゅうかんたんふ", "（双感叹号）", "強い感情、驚き、または命令を強調して表す感嘆符。")
+            cleaned == "⁉" || cleaned == "⁈" || cleaned == "!?" || cleaned == "?!" || cleaned == "！？" || cleaned == "？！" -> Triple("ぎもんかんたんふ", "（疑问感叹号）", "驚きと疑問が混ざった感情を表す感嘆符疑問符。")
+            cleaned == "⁇" || cleaned == "??" || cleaned == "？？" -> Triple("ぎもんふ", "（双问号）", "強い疑問や困惑を表す疑問符。")
+            cleaned == "「" -> Triple("かぎかっこ", "（前引号）", "会話、引用、または強調する語句の開始を示す鉤括弧。")
+            cleaned == "」" -> Triple("かぎかっこ", "（后引号）", "会話、引用、または強調する語句の終了を示す鉤括弧。")
+            cleaned == "〝" -> Triple("かぎかっこ", "（前双引号）", "引用や強調を示す二重引用符の開始（ノの字形ダブルクォーテーション）。")
+            cleaned == "〟" -> Triple("かぎかっこ", "（后双引号）", "引用や強調を示す二重引用符の終了（ノの字形ダブルクォーテーション）。")
+            cleaned == "『" -> Triple("にじゅうかぎかっこ", "（前双引号）", "書名、作品名、または鉤括弧内での引用の開始を示す二重鉤括弧。")
+            cleaned == "』" -> Triple("にじゅうかぎかっこ", "（后双引号）", "書名、作品名、または鉤括弧内での引用の終了を示す二重鉤括弧。")
+            cleaned == "（" || cleaned == "(" -> Triple("かっこ", "（前括号）", "注記、補足説明、または読み仮名の開始を示す丸括弧。")
+            cleaned == "）" || cleaned == ")" -> Triple("かっこ", "（后括号）", "注記、補足説明、または読み仮名の終了を示す丸括弧。")
+            cleaned == "【" -> Triple("すみつきかっこ", "（前方括号）", "見出し、強調、または特別な分類の開始を示す隅付き括弧。")
+            cleaned == "】" -> Triple("すみつきかっこ", "（后方括号）", "見出し、強調、または特別な分類の終了を示す隅付き括弧。")
+            cleaned == "〔" -> Triple("きっこうかっこ", "（前六角括号）", "引用内の補足、注記、または記号の開始を示す亀甲括弧。")
+            cleaned == "〕" -> Triple("きっこうかっこ", "（后六角括号）", "引用内の補足、注記、または記号の終了を示す亀甲括弧。")
+            cleaned == "［" || cleaned == "[" -> Triple("かくかっこ", "（前中括号）", "注記、編集上の挿入、またはグループ化の開始を示す角括弧。")
+            cleaned == "］" || cleaned == "]" -> Triple("かくかっこ", "（后中括号）", "注記、編集上の挿入、またはグループ化の終了を示す角括弧。")
+            cleaned == "｛" || cleaned == "{" -> Triple("なみかっこ", "（前大括号）", "複数の選択肢やグループの開始を示す波括弧。")
+            cleaned == "｝" || cleaned == "}" -> Triple("なみかっこ", "（后大括号）", "複数の選択肢やグループの終了を示す波括弧。")
+            cleaned == "〜" || cleaned == "～" || cleaned == "~" || cleaned == "〰" -> Triple("なみだっしゅ", "（波浪号）", "範囲（〜から〜まで）や起点を示す波ダッシュ。")
+            cleaned.isEllipsisLike() -> Triple("さんてんりーだー", "（省略号）", "言葉の省略、余韻、または沈黙を示す三点リーダー。")
+            cleaned == "：" || cleaned == ":" -> Triple("ころん", "（冒号）", "説明、例示、または引用の提示を示すコロン。")
+            cleaned == "；" || cleaned == ";" -> Triple("せみころん", "（分号）", "文の緊密な関係にある節を区切るセミコロン。")
+            cleaned == "―" || cleaned == "—" -> Triple("だっしゅ", "（破折号）", "話の転換、説明の挿入、または余韻を示すダッシュ。")
+            cleaned.matches(Regex("^[wW]+$")) -> Triple("わら", "（笑）", "ネットスラングで笑いを表す記号。")
             else -> Triple("きごう", "（符号）", "記号または補助記号。")
         }
         return WordSegment(

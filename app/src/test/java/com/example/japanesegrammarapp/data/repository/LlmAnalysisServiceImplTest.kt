@@ -252,6 +252,115 @@ class LlmAnalysisServiceImplTest {
         assertEquals("これは画像テストです。", result)
     }
 
+    @Test
+    fun executeSegmentsCorrectlyAlignsEmojiPunctuationWithoutOffByOneCascading() = runBlocking {
+        // Reproduces the exact case from the bug report:
+        // Text: "見て‼️キチガイ風車だよ‼️"
+        // Tokens contains "‼️" with variation selector U+FE0F.
+        // LLM only returns segment analysis for actual vocabulary, ignoring the punctuation tokens.
+        val repository = FakeLlmRepository(
+            response = """
+                見て|みて|看|動詞|見る|みる|連用形（て形）|動作を要求する命令・呼びかけ。
+                キチガイ|きちがい|疯子|名詞||||名詞の修飾要素。
+                風車|かざぐるま|风车|名詞||||述語名詞。
+                だ|だ|是|助動詞|だ|だ|終止形|判断や断定を表す。
+                よ|よ|呢|終助詞||||語気を和らげ相手に教え知らせる。
+            """.trimIndent()
+        )
+        val service = LlmAnalysisServiceImpl(
+            llmRepository = repository,
+            settingsRepository = FakeSettingsRepository,
+            gson = Gson()
+        )
+
+        val doubleExclamation = "‼️" // \u203C\uFE0F
+        val tokens = listOf("見て", doubleExclamation, "キチガイ", "風車", "だ", "よ", doubleExclamation)
+
+        val (result, _) = service.executeSegments(
+            text = "見て‼️キチガイ風車だよ‼️",
+            tokens = tokens,
+            imageBase64 = null,
+            mimeType = null,
+            primaryConfigs = listOf(testConfig),
+            backupConfigs = emptyList()
+        ).last()
+
+        val segments = result?.segments ?: emptyList()
+        assertEquals(7, segments.size)
+
+        // 1. "見て" -> matched with reading "みて"
+        assertEquals("見て", segments[0].text)
+        assertEquals("みて", segments[0].reading)
+        assertEquals("動詞", segments[0].partOfSpeech)
+
+        // 2. "‼️" -> recognized as punctuation, NOT hijacking "キチガイ"
+        assertEquals(doubleExclamation, segments[1].text)
+        assertEquals("にじゅうかんたんふ", segments[1].reading)
+        assertEquals("補助記号", segments[1].partOfSpeech)
+        assertTrue(com.example.japanesegrammarapp.domain.model.isPunctuationToken(segments[1].text))
+
+        // 3. "キチガイ" -> has its OWN reading "きちがい", NOT shifted to "かざぐるま"
+        assertEquals("キチガイ", segments[2].text)
+        assertEquals("きちがい", segments[2].reading)
+        assertEquals("名詞", segments[2].partOfSpeech)
+
+        // 4. "風車" -> has its OWN reading "かざぐるま", NOT shifted to "だ"
+        assertEquals("風車", segments[3].text)
+        assertEquals("かざぐるま", segments[3].reading)
+
+        // 5. "だ" -> reading "だ"
+        assertEquals("だ", segments[4].text)
+        assertEquals("だ", segments[4].reading)
+
+        // 6. "よ" -> reading "よ"
+        assertEquals("よ", segments[5].text)
+        assertEquals("よ", segments[5].reading)
+
+        // 7. "‼️" -> recognized as punctuation
+        assertEquals(doubleExclamation, segments[6].text)
+        assertEquals("にじゅうかんたんふ", segments[6].reading)
+        assertEquals("補助記号", segments[6].partOfSpeech)
+    }
+
+    @Test
+    fun executeSegmentsHeuristicAlignmentHandlesSkippedTokensAndLookahead() = runBlocking {
+        // Case: LLM completely omitted "突然" from its output
+        val repository = FakeLlmRepository(
+            response = """
+                彼|かれ|他|代名詞||||
+                笑った|わらった|笑了|動詞||||
+            """.trimIndent()
+        )
+        val service = LlmAnalysisServiceImpl(
+            llmRepository = repository,
+            settingsRepository = FakeSettingsRepository,
+            gson = Gson()
+        )
+
+        val tokens = listOf("彼", "突然", "笑った")
+        val (result, _) = service.executeSegments(
+            text = "彼突然笑った",
+            tokens = tokens,
+            imageBase64 = null,
+            mimeType = null,
+            primaryConfigs = listOf(testConfig),
+            backupConfigs = emptyList()
+        ).last()
+
+        val segments = result?.segments ?: emptyList()
+        assertEquals(3, segments.size)
+        assertEquals("彼", segments[0].text)
+        assertEquals("かれ", segments[0].reading)
+
+        // "突然" was skipped by LLM: should remain as fallback token and NOT hijack "笑った"
+        assertEquals("突然", segments[1].text)
+        assertEquals(null, segments[1].reading)
+
+        // "笑った" is correctly aligned via lookahead
+        assertEquals("笑った", segments[2].text)
+        assertEquals("わらった", segments[2].reading)
+    }
+
     private companion object {
         val testConfig = LlmApiConfig(
             provider = "Gemini",

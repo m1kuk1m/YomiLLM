@@ -5,19 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.10.1] - 2026-09-25
+## [1.11.0] - 2026-10-16
 
-### Fixed
-- Fixed vertical Japanese reading order inversion when selecting cross-column text (`縦書き跨列`):
-  - Intelligent slice recomposition (`createRecomposedBitmap`): cross-column selections (<= 2 columns) are sequentially stitched into a single vertical strip, eliminating multiline diagonal gaps and preventing vision LLMs from misinterpreting reading direction as left-to-right.
-  - Multi-column selections (>= 3 columns) are top-aligned and ordered right-to-left following standard Japanese typesetting.
-- Fixed text selection handle dragging UX in camera crop review:
-  - Enhanced pointer input dispatch with nested scroll consumption to prevent unintentional dragging of underlying zoom/pan layer.
-  - Added dedicated touch hit-target expansion for start/end handles with precise image-space coordinate mapping.
-  - Constrained handle drag gestures strictly within image bounds to eliminate viewport drift.
+### Added
+- Batch photo OCR text input queue:
+  - Added `PhotoInputQueueManager` to handle multi-photo text recognition sequences seamlessly.
+  - Continuous multi-capture workflow in camera review (`Capture Next` / `Done`) allowing rapid capture of multiple book pages or manga panels without bouncing between screens.
+  - Interactive workspace input status banner with live progress indicators (`Recognizing photo X/Y...`), typewriter streaming text insertion, and one-tap controls (`Skip Animation`, `Cancel`).
+- Dedicated decoupled OCR capture mode:
+  - Added clean toggle between "Photo Text Input" (local ML Kit text extraction with editor fallback) and "Direct Image Analysis" (vision LLM multimodal analysis).
+- Complete Settings screen reorganization:
+  - Restructured settings into clear, intuitive categories: *Overview & Study*, *AI & Core Analysis*, *General & Appearance*, and *Device Sync & Advanced*.
+  - Added real-time configuration summary cards and badges displaying active API endpoints, configured LLM models, TTS key status, and OCR engine selection.
 
 ### Changed
-- Refactored service and server version reporting in `DeckSyncForegroundService` and `DeckSyncServer` to dynamically reference `BuildConfig.VERSION_NAME`.
+- Refined vertical Japanese cross-column text selection (`縦書き跨列`):
+  - Intelligent slice recomposition (`createRecomposedBitmap`): cross-column selections (<= 2 columns) are sequentially stitched into a single vertical strip, eliminating multiline diagonal gaps and preventing vision LLMs from misinterpreting reading direction as left-to-right.
+  - Multi-column selections (>= 3 columns) are top-aligned and ordered right-to-left following standard Japanese typesetting.
+- Improved camera crop review interactions:
+  - Enhanced pointer input dispatch with nested scroll consumption to eliminate viewport drift when dragging text selection handles.
+  - Expanded touch hit-targets for start/end handles with precise image-space coordinate mapping.
+  - Constrained handle drag gestures strictly within image bounds.
+- Refactored version reporting:
+  - Dynamically reference `BuildConfig.VERSION_NAME` in `DeckSyncForegroundService` and `DeckSyncServer`.
+
+### Fixed
+- Fixed emoji and punctuation segment alignment:
+  - Resolved word boundary misalignment when sentences contain emojis, special punctuation, or Japanese quotation marks (`「」『』`) via robust heuristic fallback and normalized boundary matching.
+- Fixed Steam Deck wireless drop stability:
+  - Prevented IP address overwrite during background polling, added native PNG image support, and cleaned up unused network resources.
+- Fixed bookmark screen rendering:
+  - Resolved blank screen issue in Sentences and Grammar tabs when filtering conditions changed.
 
 ## [1.10.0] - 2026-08-25
 
@@ -328,7 +346,7 @@ This release should make grammar analysis more stable for sentences containing e
 ### Added
 - Initial stable release featuring Japanese grammar analysis using Kuromoji tokenizer and custom LLM prompts.
 
-[1.10.1]: https://github.com/m1kuk1m/YomiLLM/releases/tag/v1.10.1
+[1.11.0]: https://github.com/m1kuk1m/YomiLLM/releases/tag/v1.11.0
 [1.10.0]: https://github.com/m1kuk1m/YomiLLM/releases/tag/v1.10.0
 [1.9.2]: https://github.com/m1kuk1m/YomiLLM/releases/tag/v1.9.2
 [1.9.1]: https://github.com/m1kuk1m/YomiLLM/releases/tag/v1.9.1

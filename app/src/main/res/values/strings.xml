@@ -122,6 +122,7 @@
     <string name="module_tokenizer_ocr">Tokenizer (OCR)</string>
     <string name="module_tokenizer_image">Tokenizer (Image)</string>
     <string name="module_tokenizer_image_repair">Tokenizer (Image Repair)</string>
+    <string name="module_image_ocr">Image Text Recognition</string>
     <string name="module_segments">Word Card Details</string>
     <string name="ocr_scanning">OCR &amp; Scanning</string>
     <string name="llm_prompts">LLM &amp; Prompts</string>
@@ -353,12 +354,14 @@
     <string name="step_tokenization">Tokenization</string>
     <string name="step_clause_analysis">Clause Analysis</string>
     <string name="step_grammar_explanation">Grammar Explanation</string>
+    <string name="step_image_ocr">Image Text Recognition</string>
 
     <!-- Dynamic Analysis Messages -->
     <string name="analysis_completed_short">Analysis completed: \"%1$s...\"</string>
     <string name="analysis_completed_full">Analysis completed: \"%1$s\"</string>
 
     <!-- Errors -->
+    <string name="error_image_ocr_empty">Could not recognize valid Japanese text from the image.</string>
     <string name="error_both_api_failed">Failed to call both Main and Backup API. Main: %1$s. Backup: %2$s</string>
     <string name="error_main_api_failed_no_backup">Failed to retry Main API (%1$s) and Backup API is not set or valid. Main API error: %2$s</string>
 

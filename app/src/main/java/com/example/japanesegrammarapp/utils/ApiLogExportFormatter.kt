@@ -4,7 +4,8 @@ object ApiLogExportFormatter {
     fun format(
         logs: List<ApiDebugLog>,
         includeFullDebug: Boolean,
-        labelResolver: (String) -> String = { it }
+        labelResolver: (String) -> String = { it },
+        stepResolver: (String) -> String = { it }
     ): String {
         return logs.joinToString("\n\n") { log ->
             buildString {
@@ -15,7 +16,8 @@ object ApiLogExportFormatter {
                     appendLine("Reasoning Level: ${log.reasoningLevel.safe()}")
                 }
                 appendLine("Record: ${log.recordId ?: "-"}")
-                appendLine("Step: ${log.stepName?.safe() ?: "-"}")
+                val resolvedStep = log.stepName?.let { stepResolver(it) }?.ifBlank { "-" } ?: "-"
+                appendLine("Step: ${resolvedStep.safe()}")
                 appendLine("Attempt: ${log.attempt ?: "-"}")
                 appendLine("Elapsed: ${log.elapsedMs ?: "-"}ms")
                 appendLine("Image: ${log.hasImage}")

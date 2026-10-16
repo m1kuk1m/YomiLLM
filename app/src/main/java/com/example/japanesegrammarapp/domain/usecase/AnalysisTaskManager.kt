@@ -12,6 +12,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 data class AnalysisProgress(
+    val isImageTask: Boolean = false,
+    val imageOcrCompleted: Boolean = false,
     val tokenizerCompleted: Boolean = false,
     val segmentsCompleted: Boolean = false,
     val clausesCompleted: Boolean = false,
@@ -191,6 +193,7 @@ class DefaultAnalysisTaskManager @Inject constructor(
                 val clausesConfigs = stepPrimaryConfigs.getValue(AnalysisModule.CLAUSES)
                 val grammarConfigs = stepPrimaryConfigs.getValue(AnalysisModule.GRAMMAR)
                 val segmentsConfigs = stepPrimaryConfigs.getValue(AnalysisModule.SEGMENTS)
+                val imageOcrConfigs = stepPrimaryConfigs.getValue(AnalysisModule.IMAGE_OCR)
 
                 // Perform OCR if needed
                 val isOcrEnabled = settingsRepository.getUseOcr()
@@ -209,7 +212,7 @@ class DefaultAnalysisTaskManager @Inject constructor(
 
                 // tokenizer 変種は入力モード確定後に解決(executeTokenizer と同一条件)
                 val tokenizerConfigs = stepPrimaryConfigs.getValue(
-                    AnalysisModule.tokenizerVariant(imageBase64, isOcrMode, imageTokenizerMode)
+                    AnalysisModule.tokenizerVariant(isOcrMode)
                 )
 
 
@@ -453,77 +456,82 @@ class DefaultAnalysisTaskManager @Inject constructor(
                     }
                 } else {
                     // ==========================================
-                    // Non-OCR Mode Flow (Tokenizer, Translation, Clauses, Grammar in parallel. Segments runs after Tokenizer.)
+                    // Non-Local-OCR Flow (Image OCR if image present, then Tokenizer, Translation, Clauses, Grammar in parallel. Segments runs after Tokenizer.)
                     // ==========================================
+                    val analysisText: String
                     if (imageBase64 != null) {
-                        // ==========================================
-                        // Direct Image Upload Mode Flow (Sequential, Image uploaded to Tokenizer only)
-                        // ==========================================
-                        var tokens = emptyList<String>()
+                        progressStore.setImageTask(recordId, true)
                         var recognizedText: String? = null
-
                         try {
-                            llmAnalysisService.executeTokenizer(
-                                text = "",
+                            llmAnalysisService.executeImageOcr(
                                 imageBase64 = imageBase64,
                                 mimeType = mimeType,
-                                isOcrMode = false,
-                                imageTokenizerMode = imageTokenizerMode,
-                                primaryConfigs = tokenizerConfigs,
+                                primaryConfigs = imageOcrConfigs,
                                 backupConfigs = backupConfigs,
-                                onRetry = getRetryListener(AnalysisStep.TOKENIZATION),
-                                onBackup = getBackupListener(AnalysisStep.TOKENIZATION),
+                                onRetry = getRetryListener(AnalysisStep.IMAGE_OCR),
+                                onBackup = getBackupListener(AnalysisStep.IMAGE_OCR),
                                 recordId = recordId,
-                                stepName = AnalysisStep.TOKENIZATION.name
+                                stepName = AnalysisStep.IMAGE_OCR.name
                             ).collect { res ->
-                                val tokenObj = res.first
+                                val chunk = res.first
                                 val metadata = res.second
-                                tokens = tokenObj?.tokens ?: emptyList()
-                                recognizedText = tokenObj?.recognizedText
-
-                                val skeletonSegments = tokens.map { WordSegment(text = it) }
-                                progressStore.updatePartialSegments(recordId, skeletonSegments)
-                                partialResultStore.update { current ->
-                                    var updated = current
-                                    if (skeletonSegments.isNotEmpty()) {
-                                        updated = updated.copy(segments = skeletonSegments)
+                                if (!chunk.isNullOrBlank()) {
+                                    recognizedText = chunk
+                                    val cur = saveAnalysisRecordUseCase.getById(recordId)
+                                    if (cur != null) {
+                                        saveAnalysisRecordUseCase.update(cur.copy(originalText = chunk))
                                     }
-                                    updated.copy(
-                                        consumedTokens = updated.consumedTokens + metadata.consumedTokens,
-                                        inputTokens = updated.inputTokens + metadata.inputTokens,
-                                        outputTokens = updated.outputTokens + metadata.outputTokens
+                                }
+                                partialResultStore.update { current ->
+                                    current.copy(
+                                        consumedTokens = current.consumedTokens + metadata.consumedTokens,
+                                        inputTokens = current.inputTokens + metadata.inputTokens,
+                                        outputTokens = current.outputTokens + metadata.outputTokens
                                     )
                                 }
                             }
                         } catch (e: Exception) {
-                            logStepFailure(recordId, AnalysisStep.TOKENIZATION, e)
-                            progressStore.markStepError(recordId, AnalysisStep.TOKENIZATION.name, e.localizedMessage ?: "Tokenizer failed")
-                            
-                            tokens = listOf("画像認識失敗")
-                            recognizedText = "画像認識失敗"
-                            
-                            val skeletonSegments = tokens.map { WordSegment(text = it) }
-                            progressStore.updatePartialSegments(recordId, skeletonSegments)
-                            partialResultStore.update { current ->
-                                current.copy(segments = skeletonSegments)
+                            logStepFailure(recordId, AnalysisStep.IMAGE_OCR, e)
+                            progressStore.markStepError(recordId, AnalysisStep.IMAGE_OCR.name, e.localizedMessage ?: "Image OCR failed")
+                            val currentRecord = saveAnalysisRecordUseCase.getById(recordId)
+                            if (currentRecord != null) {
+                                saveAnalysisRecordUseCase.update(
+                                    currentRecord.copy(
+                                        status = AnalysisStatus.FAILED,
+                                        errorMessage = e.localizedMessage ?: "Image OCR failed"
+                                    )
+                                )
                             }
+                            eventBus.post(AnalysisEvent.TaskFailed(recordId, e))
+                            return@launch
                         }
 
-                        var effectiveText = text
-                        val finalRecognizedText = recognizedText
-                        if (!finalRecognizedText.isNullOrBlank()) {
-                            effectiveText = finalRecognizedText
-                        } else if (tokens.isNotEmpty()) {
-                            effectiveText = tokens.joinToString("")
-                        }
+                        var effectiveText = recognizedText?.trim().orEmpty()
                         if (settingsRepository.getRemoveAccidentalSpaces()) {
                             effectiveText = TextCleaner.removeAccidentalSpaces(effectiveText)
                         }
 
+                        if (effectiveText.isBlank()) {
+                            val err = IllegalStateException("未能从图片中识别出有效日文内容")
+                            logStepFailure(recordId, AnalysisStep.IMAGE_OCR, err)
+                            progressStore.markStepError(recordId, AnalysisStep.IMAGE_OCR.name, err.message ?: "Empty OCR text")
+                            val currentRecord = saveAnalysisRecordUseCase.getById(recordId)
+                            if (currentRecord != null) {
+                                saveAnalysisRecordUseCase.update(
+                                    currentRecord.copy(
+                                        status = AnalysisStatus.FAILED,
+                                        errorMessage = err.message
+                                    )
+                                )
+                            }
+                            eventBus.post(AnalysisEvent.TaskFailed(recordId, err))
+                            return@launch
+                        }
+
+                        progressStore.markImageOcrCompleted(recordId)
 
                         val duplicateRecord = saveAnalysisRecordUseCase.getByOriginalText(effectiveText)
                         if (duplicateRecord != null && duplicateRecord.id != recordId) {
-                            // Atomically clean up the newly created record before notifying the UI.
                             val currentRecord = saveAnalysisRecordUseCase.getById(recordId)
                             if (currentRecord != null) {
                                 saveAnalysisRecordUseCase.delete(currentRecord)
@@ -538,157 +546,20 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                 saveAnalysisRecordUseCase.update(currentRecord.copy(originalText = effectiveText))
                             }
                         }
-
-                        progressStore.markTokenizerCompleted(recordId)
-
-                        supervisorScope {
-                            // 1. Translation
-                            launch {
-                                try {
-                                    llmAnalysisService.executeTranslation(
-                                        text = effectiveText,
-                                        imageBase64 = null,
-                                        mimeType = null,
-                                        primaryConfigs = translationConfigs,
-                                        backupConfigs = backupConfigs,
-                                        onRetry = getRetryListener(AnalysisStep.TRANSLATION),
-                                        onBackup = getBackupListener(AnalysisStep.TRANSLATION),
-                                        recordId = recordId,
-                                        stepName = AnalysisStep.TRANSLATION.name
-                                    ).collect { res ->
-                                        val obj = res.first
-                                        val meta = res.second
-                                        partialResultStore.update { current ->
-                                        current.copy(
-                                            translation = obj?.translation,
-                                            consumedTokens = current.consumedTokens + meta.consumedTokens,
-                                            inputTokens = current.inputTokens + meta.inputTokens,
-                                            outputTokens = current.outputTokens + meta.outputTokens
-                                        )
-                                    }
-                                    }
-                                } catch (e: Exception) {
-                                    logStepFailure(recordId, AnalysisStep.TRANSLATION, e)
-                                    progressStore.markStepError(recordId, AnalysisStep.TRANSLATION.name, e.localizedMessage ?: "Unknown error")
-                                } finally {
-                                    progressStore.markTranslationCompleted(recordId)
-                                }
-                            }
-
-                            // 2. Clauses
-                            launch {
-                                try {
-                                    llmAnalysisService.executeClauses(
-                                        text = effectiveText,
-                                        imageBase64 = null,
-                                        mimeType = null,
-                                        primaryConfigs = clausesConfigs,
-                                        backupConfigs = backupConfigs,
-                                        onRetry = getRetryListener(AnalysisStep.CLAUSE_ANALYSIS),
-                                        onBackup = getBackupListener(AnalysisStep.CLAUSE_ANALYSIS),
-                                        recordId = recordId,
-                                        stepName = AnalysisStep.CLAUSE_ANALYSIS.name
-                                    ).collect { res ->
-                                        val obj = res.first
-                                        val meta = res.second
-                                        partialResultStore.update { current ->
-                                        current.copy(
-                                            clauses = obj?.clauses,
-                                            consumedTokens = current.consumedTokens + meta.consumedTokens,
-                                            inputTokens = current.inputTokens + meta.inputTokens,
-                                            outputTokens = current.outputTokens + meta.outputTokens
-                                        )
-                                    }
-                                    }
-                                } catch (e: Exception) {
-                                    logStepFailure(recordId, AnalysisStep.CLAUSE_ANALYSIS, e)
-                                    progressStore.markStepError(recordId, AnalysisStep.CLAUSE_ANALYSIS.name, e.localizedMessage ?: "Unknown error")
-                                } finally {
-                                    progressStore.markClausesCompleted(recordId)
-                                }
-                            }
-
-                            // 3. Grammar
-                            launch {
-                                try {
-                                    llmAnalysisService.executeGrammar(
-                                        text = effectiveText,
-                                        imageBase64 = null,
-                                        mimeType = null,
-                                        primaryConfigs = grammarConfigs,
-                                        backupConfigs = backupConfigs,
-                                        onRetry = getRetryListener(AnalysisStep.GRAMMAR_EXPLANATION),
-                                        onBackup = getBackupListener(AnalysisStep.GRAMMAR_EXPLANATION),
-                                        recordId = recordId,
-                                        stepName = AnalysisStep.GRAMMAR_EXPLANATION.name
-                                    ).collect { res ->
-                                        val obj = res.first
-                                        val meta = res.second
-                                        partialResultStore.update { current ->
-                                        current.copy(
-                                            grammarPoints = obj?.grammarPoints,
-                                            consumedTokens = current.consumedTokens + meta.consumedTokens,
-                                            inputTokens = current.inputTokens + meta.inputTokens,
-                                            outputTokens = current.outputTokens + meta.outputTokens
-                                        )
-                                    }
-                                    }
-                                } catch (e: Exception) {
-                                    logStepFailure(recordId, AnalysisStep.GRAMMAR_EXPLANATION, e)
-                                    progressStore.markStepError(recordId, AnalysisStep.GRAMMAR_EXPLANATION.name, e.localizedMessage ?: "Unknown error")
-                                } finally {
-                                    progressStore.markGrammarCompleted(recordId)
-                                }
-                            }
-
-                            // 4. Segments
-                            launch {
-                                try {
-                                    llmAnalysisService.executeSegments(
-                                        text = effectiveText,
-                                        tokens = tokens,
-                                        imageBase64 = null,
-                                        mimeType = null,
-                                        primaryConfigs = segmentsConfigs,
-                                        backupConfigs = backupConfigs,
-                                        onRetry = getRetryListener(AnalysisStep.DETAILED_GRAMMAR),
-                                        onBackup = getBackupListener(AnalysisStep.DETAILED_GRAMMAR),
-                                        recordId = recordId,
-                                        stepName = AnalysisStep.DETAILED_GRAMMAR.name
-                                    ).collect { res ->
-                                        val obj = res.first
-                                        val meta = res.second
-                                        obj?.segments?.let { progressStore.updatePartialSegments(recordId, it) }
-                                        partialResultStore.update { current ->
-                                        val nextSegments = obj?.segments ?: current.segments
-                                        current.copy(
-                                            segments = nextSegments,
-                                            consumedTokens = current.consumedTokens + meta.consumedTokens,
-                                            inputTokens = current.inputTokens + meta.inputTokens,
-                                            outputTokens = current.outputTokens + meta.outputTokens
-                                        )
-                                    }
-                                    }
-                                } catch (e: Exception) {
-                                    logStepFailure(recordId, AnalysisStep.DETAILED_GRAMMAR, e)
-                                    progressStore.markStepError(recordId, AnalysisStep.DETAILED_GRAMMAR.name, e.localizedMessage ?: "Unknown error")
-                                } finally {
-                                    progressStore.markSegmentsCompleted(recordId)
-                                }
-                            }
-                        }
+                        analysisText = effectiveText
                     } else {
-                        // ==========================================
-                        // Direct Text Mode Flow (Tokenizer, Translation, Clauses, Grammar in parallel. Segments runs after Tokenizer.)
-                        // ==========================================
-                        supervisorScope {
+                        analysisText = text
+                    }
+
+                    // Parallel Pipeline for Analysis
+                    supervisorScope {
                             // 1. Translation
                             launch {
                                 try {
                                     llmAnalysisService.executeTranslation(
-                                        text = text,
-                                        imageBase64 = imageBase64,
-                                        mimeType = mimeType,
+                                        text = analysisText,
+                                        imageBase64 = null,
+                                        mimeType = null,
                                         primaryConfigs = translationConfigs,
                                         backupConfigs = backupConfigs,
                                         onRetry = getRetryListener(AnalysisStep.TRANSLATION),
@@ -719,9 +590,9 @@ class DefaultAnalysisTaskManager @Inject constructor(
                             launch {
                                 try {
                                     llmAnalysisService.executeClauses(
-                                        text = text,
-                                        imageBase64 = imageBase64,
-                                        mimeType = mimeType,
+                                        text = analysisText,
+                                        imageBase64 = null,
+                                        mimeType = null,
                                         primaryConfigs = clausesConfigs,
                                         backupConfigs = backupConfigs,
                                         onRetry = getRetryListener(AnalysisStep.CLAUSE_ANALYSIS),
@@ -752,9 +623,9 @@ class DefaultAnalysisTaskManager @Inject constructor(
                             launch {
                                 try {
                                     llmAnalysisService.executeGrammar(
-                                        text = text,
-                                        imageBase64 = imageBase64,
-                                        mimeType = mimeType,
+                                        text = analysisText,
+                                        imageBase64 = null,
+                                        mimeType = null,
                                         primaryConfigs = grammarConfigs,
                                         backupConfigs = backupConfigs,
                                         onRetry = getRetryListener(AnalysisStep.GRAMMAR_EXPLANATION),
@@ -787,9 +658,9 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                 try {
                                     // 4a. Execute Tokenizer first
                                     llmAnalysisService.executeTokenizer(
-                                        text = text,
-                                        imageBase64 = imageBase64,
-                                        mimeType = mimeType,
+                                        text = analysisText,
+                                        imageBase64 = null,
+                                        mimeType = null,
                                         isOcrMode = false,
                                         imageTokenizerMode = imageTokenizerMode,
                                         primaryConfigs = tokenizerConfigs,
@@ -820,7 +691,7 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                 } catch (e: Exception) {
                                     logStepFailure(recordId, AnalysisStep.TOKENIZATION, e)
                                     progressStore.markStepError(recordId, AnalysisStep.TOKENIZATION.name, e.localizedMessage ?: "Tokenizer failed")
-                                    val fallbackToken = if (text.isNotBlank()) text else "読み取り失敗"
+                                    val fallbackToken = if (analysisText.isNotBlank()) analysisText else "読み取り失敗"
                                     tokens = listOf(fallbackToken)
                                     val skeletonSegments = tokens.map { WordSegment(text = it) }
                                     progressStore.updatePartialSegments(recordId, skeletonSegments)
@@ -834,10 +705,10 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                 try {
                                     // 4b. Execute detailed segments analysis using the retrieved tokens
                                     llmAnalysisService.executeSegments(
-                                        text = text,
+                                        text = analysisText,
                                         tokens = tokens,
-                                        imageBase64 = imageBase64,
-                                        mimeType = mimeType,
+                                        imageBase64 = null,
+                                        mimeType = null,
                                         primaryConfigs = segmentsConfigs,
                                         backupConfigs = backupConfigs,
                                         onRetry = getRetryListener(AnalysisStep.DETAILED_GRAMMAR),
@@ -867,7 +738,6 @@ class DefaultAnalysisTaskManager @Inject constructor(
                             }
                         }
                     }
-                }
 
                 val currentRecord = saveAnalysisRecordUseCase.getById(recordId)
                 if (currentRecord != null) {

@@ -56,6 +56,83 @@ fun snapOffsetRatio(ratio: Float, threshold: Float = 0.06f): Float {
     }
 }
 
+fun mergeCollinearVerticalColumn(boxes: List<SelectionRect>): List<SelectionRect> {
+    if (boxes.size <= 1) return boxes
+    val sorted = boxes.sortedBy { it.top }
+    val result = mutableListOf<SelectionRect>()
+    var current = sorted[0]
+
+    for (i in 1 until sorted.size) {
+        val next = sorted[i]
+        val minW = minOf(current.width, next.width).coerceAtLeast(1)
+        val minH = minOf(current.height, next.height).coerceAtLeast(1)
+        val overlapX = maxOf(0, minOf(current.right, next.right) - maxOf(current.left, next.left))
+        val centerDistX = kotlin.math.abs(current.centerX - next.centerX)
+        // Allow slight camera tilt / font variation: center distance within 85% width or 24px, or partial X overlap
+        val isHorizontallyAligned = overlapX >= minW * 0.20f || centerDistX <= maxOf(minW * 0.85f, 24f)
+
+        val overlapY = maxOf(0, minOf(current.bottom, next.bottom) - maxOf(current.top, next.top))
+        // Parallel check: if they overlap in Y by more than 25% or more than line width, they are parallel lines!
+        val isParallel = overlapY > minH * 0.25f || overlapY > maxOf(minW * 1.2f, 24f)
+
+        val verticalOverlap = current.bottom >= next.top
+        val verticalGap = if (!verticalOverlap) next.top - current.bottom else 0
+        val isEndToEndNeighbor = !isParallel && (verticalOverlap || verticalGap <= maxOf(minW * 1.8f, 36f))
+
+        if (isHorizontallyAligned && isEndToEndNeighbor) {
+            current = SelectionRect(
+                left = minOf(current.left, next.left),
+                top = minOf(current.top, next.top),
+                right = maxOf(current.right, next.right),
+                bottom = maxOf(current.bottom, next.bottom)
+            )
+        } else {
+            result.add(current)
+            current = next
+        }
+    }
+    result.add(current)
+    return result
+}
+
+fun mergeCollinearHorizontalRow(boxes: List<SelectionRect>): List<SelectionRect> {
+    if (boxes.size <= 1) return boxes
+    val sorted = boxes.sortedBy { it.left }
+    val result = mutableListOf<SelectionRect>()
+    var current = sorted[0]
+
+    for (i in 1 until sorted.size) {
+        val next = sorted[i]
+        val minH = minOf(current.height, next.height).coerceAtLeast(1)
+        val minW = minOf(current.width, next.width).coerceAtLeast(1)
+        val overlapY = maxOf(0, minOf(current.bottom, next.bottom) - maxOf(current.top, next.top))
+        val centerDistY = kotlin.math.abs(current.centerY - next.centerY)
+        val isVerticallyAligned = overlapY >= minH * 0.20f || centerDistY <= maxOf(minH * 0.85f, 24f)
+
+        val overlapX = maxOf(0, minOf(current.right, next.right) - maxOf(current.left, next.left))
+        // Parallel check: if they overlap in X by more than 25% or more than line height, they are parallel lines!
+        val isParallel = overlapX > minW * 0.25f || overlapX > maxOf(minH * 1.2f, 24f)
+
+        val horizontalOverlap = current.right >= next.left
+        val horizontalGap = if (!horizontalOverlap) next.left - current.right else 0
+        val isEndToEndNeighbor = !isParallel && (horizontalOverlap || horizontalGap <= maxOf(minH * 1.8f, 36f))
+
+        if (isVerticallyAligned && isEndToEndNeighbor) {
+            current = SelectionRect(
+                left = minOf(current.left, next.left),
+                top = minOf(current.top, next.top),
+                right = maxOf(current.right, next.right),
+                bottom = maxOf(current.bottom, next.bottom)
+            )
+        } else {
+            result.add(current)
+            current = next
+        }
+    }
+    result.add(current)
+    return result
+}
+
 fun sortSelectionRects(boxes: List<SelectionRect>): List<SelectionRect> {
     if (boxes.isEmpty()) return emptyList()
 
@@ -71,7 +148,7 @@ fun sortSelectionRects(boxes: List<SelectionRect>): List<SelectionRect> {
     }
 
     // 1. Group and sort vertical text: right-to-left columns, top-to-bottom within column
-    val verticalColumns = mutableListOf<MutableList<SelectionRect>>()
+    val verticalColumns = mutableListOf<List<SelectionRect>>()
     val remainingVertical = verticalBoxes.sortedByDescending { it.centerX }.toMutableList()
 
     while (remainingVertical.isNotEmpty()) {
@@ -86,22 +163,47 @@ fun sortSelectionRects(boxes: List<SelectionRect>): List<SelectionRect> {
             val overlap = maxOf(0, minOf(colRight, next.right) - maxOf(colLeft, next.left))
             val minW = minOf(colRight - colLeft, next.width).coerceAtLeast(1)
             val centerDist = kotlin.math.abs(next.centerX - (colLeft + colRight) / 2)
-            val threshold = maxOf(minW * 0.55f, 12f)
-            if (overlap >= minW * 0.40f || centerDist <= threshold) {
+            val threshold = maxOf(minW * 0.40f, 10f)
+
+            val isParallelToAny = column.any { existing ->
+                val overlapY = maxOf(0, minOf(existing.bottom, next.bottom) - maxOf(existing.top, next.top))
+                val minH = minOf(existing.height, next.height).coerceAtLeast(1)
+                overlapY > minH * 0.25f || overlapY > maxOf(minW * 1.2f, 24f)
+            }
+
+            val isCollinearWithAny = column.any { existing ->
+                val boxMinW = minOf(existing.width, next.width).coerceAtLeast(1)
+                val overlapX = maxOf(0, minOf(existing.right, next.right) - maxOf(existing.left, next.left))
+                val centerDistX = kotlin.math.abs(existing.centerX - next.centerX)
+                val verticalOverlap = maxOf(0, minOf(existing.bottom, next.bottom) - maxOf(existing.top, next.top))
+                val verticalGap = if (existing.bottom < next.top) {
+                    next.top - existing.bottom
+                } else if (next.bottom < existing.top) {
+                    existing.top - next.bottom
+                } else {
+                    0
+                }
+                val isNeighbor = verticalOverlap > 0 || verticalGap <= maxOf(boxMinW * 1.8f, 36f)
+                val isAligned = overlapX >= boxMinW * 0.20f || centerDistX <= maxOf(boxMinW * 0.85f, 24f)
+                isNeighbor && isAligned
+            }
+
+            val standardAligned = overlap >= minW * 0.50f || centerDist <= threshold
+            if (!isParallelToAny && (standardAligned || isCollinearWithAny)) {
                 column.add(next)
                 colLeft = minOf(colLeft, next.left)
                 colRight = maxOf(colRight, next.right)
                 iterator.remove()
             }
         }
-        column.sortBy { it.top }
-        verticalColumns.add(column)
+        val mergedColumn = mergeCollinearVerticalColumn(column)
+        verticalColumns.add(mergedColumn)
     }
     verticalColumns.sortByDescending { col -> col.map { it.centerX }.average() }
     val sortedVertical = verticalColumns.flatten()
 
     // 2. Group and sort horizontal text: top-to-bottom rows, left-to-right within row
-    val horizontalRows = mutableListOf<MutableList<SelectionRect>>()
+    val horizontalRows = mutableListOf<List<SelectionRect>>()
     val remainingHorizontal = horizontalBoxes.sortedBy { it.centerY }.toMutableList()
 
     while (remainingHorizontal.isNotEmpty()) {
@@ -116,22 +218,49 @@ fun sortSelectionRects(boxes: List<SelectionRect>): List<SelectionRect> {
             val overlap = maxOf(0, minOf(rowBottom, next.bottom) - maxOf(rowTop, next.top))
             val minH = minOf(rowBottom - rowTop, next.height).coerceAtLeast(1)
             val centerDist = kotlin.math.abs(next.centerY - (rowTop + rowBottom) / 2)
-            val threshold = maxOf(minH * 0.55f, 12f)
-            if (overlap >= minH * 0.40f || centerDist <= threshold) {
+            val threshold = maxOf(minH * 0.40f, 10f)
+
+            val isParallelToAny = row.any { existing ->
+                val overlapX = maxOf(0, minOf(existing.right, next.right) - maxOf(existing.left, next.left))
+                val minW = minOf(existing.width, next.width).coerceAtLeast(1)
+                overlapX > minW * 0.25f || overlapX > maxOf(minH * 1.2f, 24f)
+            }
+
+            val isCollinearWithAny = row.any { existing ->
+                val boxMinH = minOf(existing.height, next.height).coerceAtLeast(1)
+                val overlapY = maxOf(0, minOf(existing.bottom, next.bottom) - maxOf(existing.top, next.top))
+                val centerDistY = kotlin.math.abs(existing.centerY - next.centerY)
+                val horizontalOverlap = maxOf(0, minOf(existing.right, next.right) - maxOf(existing.left, next.left))
+                val horizontalGap = if (existing.right < next.left) {
+                    next.left - existing.right
+                } else if (next.right < existing.left) {
+                    existing.left - next.right
+                } else {
+                    0
+                }
+                val isNeighbor = horizontalOverlap > 0 || horizontalGap <= maxOf(boxMinH * 1.8f, 36f)
+                val isAligned = overlapY >= boxMinH * 0.20f || centerDistY <= maxOf(boxMinH * 0.85f, 24f)
+                isNeighbor && isAligned
+            }
+
+            val standardAligned = overlap >= minH * 0.50f || centerDist <= threshold
+            if (!isParallelToAny && (standardAligned || isCollinearWithAny)) {
                 row.add(next)
                 rowTop = minOf(rowTop, next.top)
                 rowBottom = maxOf(rowBottom, next.bottom)
                 iterator.remove()
             }
         }
-        row.sortBy { it.left }
-        horizontalRows.add(row)
+        val mergedRow = mergeCollinearHorizontalRow(row)
+        horizontalRows.add(mergedRow)
     }
     horizontalRows.sortBy { r -> r.map { it.centerY }.average() }
     val sortedHorizontal = horizontalRows.flatten()
 
     return sortedVertical + sortedHorizontal
 }
+
+fun mergeCollinearSelectionRects(boxes: List<SelectionRect>): List<SelectionRect> = sortSelectionRects(boxes)
 
 fun calculateSubLineSelectionRects(
     boxes: List<SelectionRect>,

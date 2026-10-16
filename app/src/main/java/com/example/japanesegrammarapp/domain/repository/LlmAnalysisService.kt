@@ -4,11 +4,22 @@ import com.example.japanesegrammarapp.domain.model.DetailedAnalysisResult
 import com.example.japanesegrammarapp.domain.model.TokenizationResult
 
 interface LlmAnalysisService {
+    suspend fun executeImageOcr(
+        imageBase64: String,
+        mimeType: String?,
+        primaryConfigs: List<LlmApiConfig>,
+        backupConfigs: List<LlmApiConfig>,
+        onRetry: (attempt: Int) -> Unit = {},
+        onBackup: (backupProvider: String) -> Unit = {},
+        recordId: Int? = null,
+        stepName: String? = null
+    ): kotlinx.coroutines.flow.Flow<Pair<String?, LlmResultMetadata>>
+
     suspend fun executeTokenizer(
         text: String,
-        imageBase64: String?,
-        mimeType: String?,
-        isOcrMode: Boolean,
+        imageBase64: String? = null,
+        mimeType: String? = null,
+        isOcrMode: Boolean = false,
         imageTokenizerMode: String = "faithful",
         primaryConfigs: List<LlmApiConfig>,
         backupConfigs: List<LlmApiConfig>,

@@ -22,6 +22,14 @@ class AnalysisProgressStore {
         update(recordId) { it.copy(partialSegments = segments) }
     }
 
+    fun setImageTask(recordId: Int, isImage: Boolean) {
+        update(recordId) { it.copy(isImageTask = isImage) }
+    }
+
+    fun markImageOcrCompleted(recordId: Int) {
+        update(recordId) { it.copy(imageOcrCompleted = true) }
+    }
+
     fun markTokenizerCompleted(recordId: Int) {
         update(recordId) { it.copy(tokenizerCompleted = true) }
     }

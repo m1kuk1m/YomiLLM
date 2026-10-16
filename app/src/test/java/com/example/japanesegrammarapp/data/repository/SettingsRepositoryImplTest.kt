@@ -101,13 +101,12 @@ class SettingsRepositoryImplTest {
         val repository = newRepository(standardPrefs, TestSharedPreferences())
 
         repository.setComponentModelConfig(
-            AnalysisModule.TOKENIZER_IMAGE.id,
+            AnalysisModule.TOKENIZER_OCR.id,
             ComponentModelConfig("DeepSeek", "deepseek-chat")
         )
 
-        assertEquals("DeepSeek", repository.getComponentModelConfig(AnalysisModule.TOKENIZER_IMAGE.id).provider)
+        assertEquals("DeepSeek", repository.getComponentModelConfig(AnalysisModule.TOKENIZER_OCR.id).provider)
         assertEquals("Gemini", repository.getComponentModelConfig(AnalysisModule.TOKENIZER_TEXT.id).provider)
-        assertEquals("Gemini", repository.getComponentModelConfig(AnalysisModule.TOKENIZER_OCR.id).provider)
     }
 
     @Test
@@ -129,10 +128,10 @@ class SettingsRepositoryImplTest {
             repository.getComponentReasoningLevel(AnalysisModule.TRANSLATION.id)
         )
 
-        repository.setComponentReasoningLevel(AnalysisModule.TOKENIZER_IMAGE.id, ComponentReasoningLevel.LOW)
+        repository.setComponentReasoningLevel(AnalysisModule.TOKENIZER_OCR.id, ComponentReasoningLevel.LOW)
 
         val reloaded = newRepository(standardPrefs, TestSharedPreferences())
-        assertEquals(ComponentReasoningLevel.LOW, reloaded.getComponentReasoningLevel(AnalysisModule.TOKENIZER_IMAGE.id))
+        assertEquals(ComponentReasoningLevel.LOW, reloaded.getComponentReasoningLevel(AnalysisModule.TOKENIZER_OCR.id))
         assertEquals(ComponentReasoningLevel.HIGH, reloaded.getComponentReasoningLevel(AnalysisModule.TOKENIZER_TEXT.id))
     }
 

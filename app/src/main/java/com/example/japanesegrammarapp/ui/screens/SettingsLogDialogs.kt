@@ -136,9 +136,11 @@ fun SettingsLogDialogs(
                 TextButton(
                     onClick = {
                         val copyText = ApiLogExportFormatter.format(
-                            logsToCopy,
-                            includeFullApiLogExport
-                        ) { moduleDisplayName(context, it) }
+                            logs = logsToCopy,
+                            includeFullDebug = includeFullApiLogExport,
+                            labelResolver = { moduleDisplayName(context, it) },
+                            stepResolver = { apiStepLabel(context, it) }
+                        )
                         clipboardManager.setText(AnnotatedString(copyText))
                         Toast.makeText(
                             context,

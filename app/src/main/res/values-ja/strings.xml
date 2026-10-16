@@ -123,6 +123,7 @@
     <string name="module_tokenizer_ocr">分かち書き(OCR校正)</string>
     <string name="module_tokenizer_image">分かち書き(画像認識)</string>
     <string name="module_tokenizer_image_repair">分かち書き(不鮮明画像補正)</string>
+    <string name="module_image_ocr">画像テキスト認識</string>
     <string name="module_segments">単語カード詳細解析</string>
     <string name="ocr_scanning">OCRとスキャン</string>
     <string name="llm_prompts">LLMとプロンプト</string>
@@ -348,12 +349,14 @@
     <string name="step_clause_analysis">文節解析</string>
     <string name="step_grammar_explanation">文法解説</string>
     <string name="step_detailed_grammar">詳細文法解析</string>
+    <string name="step_image_ocr">画像テキスト認識</string>
 
     <!-- Dynamic Analysis Messages -->
     <string name="analysis_completed_short">「%1$s...」の分析が完了しました</string>
     <string name="analysis_completed_full">「%1$s」の分析が完了しました</string>
 
     <!-- Errors -->
+    <string name="error_image_ocr_empty">画像から有効な日本語を認識できませんでした</string>
     <string name="error_both_api_failed">メインAPIおよび予備APIの呼び出しに失敗しました。メインAPIエラー: %1$s。予備APIエラー: %2$s</string>
     <string name="error_main_api_failed_no_backup">メインAPI（%1$s）の再試行に失敗し、予備APIが設定されていないか有効ではありません。メインAPIエラー: %2$s</string>
 

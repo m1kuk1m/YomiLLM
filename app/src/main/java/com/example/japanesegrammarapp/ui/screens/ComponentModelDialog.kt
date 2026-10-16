@@ -205,8 +205,7 @@ fun ComponentModelDialog(
                                     }
                                 }
 
-                                val isImageModule = apiLabel == AnalysisModule.TOKENIZER_IMAGE.id ||
-                                    apiLabel == AnalysisModule.TOKENIZER_IMAGE_REPAIR.id
+                                val isImageModule = apiLabel == AnalysisModule.IMAGE_OCR.id
                                 if (isImageModule) {
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(

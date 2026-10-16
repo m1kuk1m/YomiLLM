@@ -394,55 +394,6 @@ fun SettingsOcrSection(
 
         SettingsDivider()
 
-        var tokenizerModeDropdownExpanded by remember { mutableStateOf(false) }
-        val currentModeLabel = when (uiState.imageTokenizerMode) {
-            "repair" -> stringResource(R.string.image_tokenizer_mode_repair)
-            else -> stringResource(R.string.image_tokenizer_mode_faithful)
-        }
-
-        SettingsItem(
-            icon = Icons.Default.AutoFixHigh,
-            title = stringResource(R.string.image_tokenizer_mode_title),
-            subtitle = currentModeLabel,
-            onClick = { tokenizerModeDropdownExpanded = true },
-            trailingContent = {
-                Box {
-                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = sumiInk.copy(alpha = 0.5f))
-                    DropdownMenu(
-                        expanded = tokenizerModeDropdownExpanded,
-                        onDismissRequest = { tokenizerModeDropdownExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(stringResource(R.string.image_tokenizer_mode_faithful), fontWeight = FontWeight.Bold, color = sumiInk)
-                                    Text(stringResource(R.string.image_tokenizer_mode_faithful_desc), fontSize = 11.sp, color = sumiInk.copy(alpha = 0.5f))
-                                }
-                            },
-                            onClick = {
-                                onImageTokenizerModeChange("faithful")
-                                tokenizerModeDropdownExpanded = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(stringResource(R.string.image_tokenizer_mode_repair), fontWeight = FontWeight.Bold, color = sumiInk)
-                                    Text(stringResource(R.string.image_tokenizer_mode_repair_desc), fontSize = 11.sp, color = sumiInk.copy(alpha = 0.5f))
-                                }
-                            },
-                            onClick = {
-                                onImageTokenizerModeChange("repair")
-                                tokenizerModeDropdownExpanded = false
-                            }
-                        )
-                    }
-                }
-            }
-        )
-
-        SettingsDivider()
-
         SettingsItem(
             icon = Icons.Default.Tune,
             title = stringResource(R.string.ocr_debug_title),

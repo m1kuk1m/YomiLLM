@@ -123,6 +123,7 @@
     <string name="module_tokenizer_ocr">分词(OCR纠错)</string>
     <string name="module_tokenizer_image">分词(图片识别)</string>
     <string name="module_tokenizer_image_repair">分词(模糊图片修复)</string>
+    <string name="module_image_ocr">图片文字识别</string>
     <string name="module_segments">词卡详情解析</string>
     <string name="ocr_scanning">OCR与扫描</string>
     <string name="llm_prompts">大模型与提示词</string>
@@ -348,12 +349,14 @@
     <string name="step_clause_analysis">句子结构分析</string>
     <string name="step_grammar_explanation">语法解析</string>
     <string name="step_detailed_grammar">详细语法解析</string>
+    <string name="step_image_ocr">图片文字识别</string>
 
     <!-- Dynamic Analysis Messages -->
     <string name="analysis_completed_short">“%1$s...” 的分析已完成</string>
     <string name="analysis_completed_full">“%1$s” 的分析已完成</string>
 
     <!-- Errors -->
+    <string name="error_image_ocr_empty">未能从图片中识别出有效日文内容</string>
     <string name="error_both_api_failed">主API和备用API均调用失败。主API错误：%1$s。备用API错误：%2$s</string>
     <string name="error_main_api_failed_no_backup">主API（%1$s）重试失败，且备用API未设置或无效。主API错误：%2$s</string>
 

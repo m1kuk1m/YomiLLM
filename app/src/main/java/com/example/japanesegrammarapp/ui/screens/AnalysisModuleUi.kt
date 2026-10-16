@@ -12,10 +12,9 @@ import com.example.japanesegrammarapp.domain.model.AnalysisModule
  */
 @StringRes
 fun AnalysisModule.displayNameRes(): Int = when (this) {
+    AnalysisModule.IMAGE_OCR -> R.string.module_image_ocr
     AnalysisModule.TOKENIZER_TEXT -> R.string.module_tokenizer_text
     AnalysisModule.TOKENIZER_OCR -> R.string.module_tokenizer_ocr
-    AnalysisModule.TOKENIZER_IMAGE -> R.string.module_tokenizer_image
-    AnalysisModule.TOKENIZER_IMAGE_REPAIR -> R.string.module_tokenizer_image_repair
     AnalysisModule.SEGMENTS -> R.string.module_segments
     AnalysisModule.TRANSLATION -> R.string.overall_translation
     AnalysisModule.CLAUSES -> R.string.sentence_clauses

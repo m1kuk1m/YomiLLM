@@ -11,24 +11,26 @@ enum class AnalysisModule(
     /** 旧バージョンの prefs キー接尾辞(移行時の読み取りフォールバック用) */
     val legacySlug: String
 ) {
+    IMAGE_OCR("image_ocr", "prompt_image_ocr", "image_ocr"),
     TOKENIZER_TEXT("tokenizer_text", "prompt_tokenizer", "word_segmentation"),
     TOKENIZER_OCR("tokenizer_ocr", "prompt_tokenizer_ocr", "word_segmentation"),
-    TOKENIZER_IMAGE("tokenizer_image", "prompt_tokenizer_image", "word_segmentation"),
-    TOKENIZER_IMAGE_REPAIR("tokenizer_image_repair", "prompt_tokenizer_image_repair", "word_segmentation"),
     SEGMENTS("segments", "prompt_segments", "detailed_analysis"),
     TRANSLATION("translation", "prompt_translation", "translation"),
     CLAUSES("clauses", "prompt_clauses", "clause_analysis"),
     GRAMMAR("grammar", "prompt_grammar", "grammar_explanation");
 
     val isTokenizer: Boolean
-        get() = this == TOKENIZER_TEXT || this == TOKENIZER_OCR ||
-            this == TOKENIZER_IMAGE || this == TOKENIZER_IMAGE_REPAIR
+        get() = this == TOKENIZER_TEXT || this == TOKENIZER_OCR
 
     companion object {
-        fun fromId(id: String): AnalysisModule? = entries.find { it.id == id }
+        fun fromId(id: String): AnalysisModule? = when (id) {
+            "tokenizer_image", "tokenizer_image_repair" -> IMAGE_OCR
+            else -> entries.find { it.id == id }
+        }
 
         /** 旧 apiTypeLabel(日本語)からの解決。旧ログ表示・互換用。 */
         fun fromLegacyLabel(label: String): AnalysisModule? = when (label) {
+            "画像認識", "画像テキスト認識" -> IMAGE_OCR
             "単語分割" -> TOKENIZER_TEXT
             "翻訳" -> TRANSLATION
             "文節解析" -> CLAUSES
@@ -39,17 +41,15 @@ enum class AnalysisModule(
 
         /**
          * 入力モードから tokenizer 変種を解決する。
-         * LlmAnalysisServiceImpl.executeTokenizer のプロンプト選択と同一条件を共有する。
          */
+        fun tokenizerVariant(isOcrMode: Boolean): AnalysisModule =
+            if (isOcrMode) TOKENIZER_OCR else TOKENIZER_TEXT
+
+        /** 旧コード互換用オーバーロード */
         fun tokenizerVariant(
             imageBase64: String?,
             isOcrMode: Boolean,
-            imageTokenizerMode: String
-        ): AnalysisModule = when {
-            isOcrMode -> TOKENIZER_OCR
-            imageBase64 != null && imageTokenizerMode == "repair" -> TOKENIZER_IMAGE_REPAIR
-            imageBase64 != null -> TOKENIZER_IMAGE
-            else -> TOKENIZER_TEXT
-        }
+            imageTokenizerMode: String = ""
+        ): AnalysisModule = tokenizerVariant(isOcrMode)
     }
 }

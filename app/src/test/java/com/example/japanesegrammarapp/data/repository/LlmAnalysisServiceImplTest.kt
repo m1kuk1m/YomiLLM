@@ -231,6 +231,27 @@ class LlmAnalysisServiceImplTest {
         assertEquals("（后双引号）", result?.segments?.get(3)?.meaning)
     }
 
+    @Test
+    fun executeImageOcrReturnsRecognizedTextAndTrimsProperly() = runBlocking {
+        val repository = FakeLlmRepository(
+            response = "  これは画像テストです。 \n\n"
+        )
+        val service = LlmAnalysisServiceImpl(
+            llmRepository = repository,
+            settingsRepository = FakeSettingsRepository,
+            gson = Gson()
+        )
+
+        val (result, _) = service.executeImageOcr(
+            imageBase64 = "base64image",
+            mimeType = "image/png",
+            primaryConfigs = listOf(testConfig),
+            backupConfigs = emptyList()
+        ).last()
+
+        assertEquals("これは画像テストです。", result)
+    }
+
     private companion object {
         val testConfig = LlmApiConfig(
             provider = "Gemini",

@@ -37,6 +37,37 @@ class LlmAnalysisServiceImpl @Inject constructor(
         val THINKING_REGEX = Regex("<think>([\\s\\S]*?)(?:</think>|$)", RegexOption.DOT_MATCHES_ALL)
     }
 
+    override suspend fun executeImageOcr(
+        imageBase64: String,
+        mimeType: String?,
+        primaryConfigs: List<LlmApiConfig>,
+        backupConfigs: List<LlmApiConfig>,
+        onRetry: (attempt: Int) -> Unit,
+        onBackup: (backupProvider: String) -> Unit,
+        recordId: Int?,
+        stepName: String?
+    ): Flow<Pair<String?, LlmResultMetadata>> {
+        val systemPrompt = settingsRepository.getCustomPrompt(AnalysisModule.IMAGE_OCR.promptKey)
+        val userPrompt = "画像内の日本語テキストを視覚情報に従って正確に読み取り、余計な説明・装飾・振仮名は一切含めず、本文のみをテキストで出力してください。"
+
+        return executeAnalysisStepStreaming(
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
+            imageBase64 = imageBase64,
+            mimeType = mimeType,
+            apiTypeLabel = AnalysisModule.IMAGE_OCR.id,
+            primaryConfigs = primaryConfigs,
+            backupConfigs = backupConfigs,
+            onRetry = onRetry,
+            onBackup = onBackup,
+            recordId = recordId,
+            stepName = stepName,
+            timeoutMs = DEFAULT_STEP_TIMEOUT_MS
+        ) { accumulated ->
+            accumulated.trim()
+        }
+    }
+
     override suspend fun executeTokenizer(
         text: String,
         imageBase64: String?,

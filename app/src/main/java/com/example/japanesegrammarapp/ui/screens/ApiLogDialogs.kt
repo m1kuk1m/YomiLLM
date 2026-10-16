@@ -110,12 +110,14 @@ fun ApiLogsDialog(
     val filterContext = LocalContext.current
     val filteredApiLogs = remember(apiLogs, searchQuery, filterStatus, filterStep, selectedDate, filterContext) {
         apiLogs.filter { log ->
+            val stepName = log.stepName.orEmpty()
             val matchesQuery = searchQuery.isBlank() ||
                 log.provider.contains(searchQuery, ignoreCase = true) ||
                 log.model.contains(searchQuery, ignoreCase = true) ||
                 log.apiTypeLabel.contains(searchQuery, ignoreCase = true) ||
-                // ローカライズ済みモジュール名でも検索できるようにする
                 moduleDisplayName(filterContext, log.apiTypeLabel).contains(searchQuery, ignoreCase = true) ||
+                stepName.contains(searchQuery, ignoreCase = true) ||
+                (stepName.isNotBlank() && apiStepLabel(filterContext, stepName).contains(searchQuery, ignoreCase = true)) ||
                 log.userPrompt.contains(searchQuery, ignoreCase = true) ||
                 (log.rawResponse?.contains(searchQuery, ignoreCase = true) ?: false)
 
@@ -287,7 +289,15 @@ fun ApiLogsDialog(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val steps = listOf("ALL", "DETAILED_GRAMMAR", "CLAUSE_ANALYSIS", "GRAMMAR_EXPLANATION", "TOKENIZATION", "TRANSLATION")
+                        val steps = listOf(
+                            "ALL",
+                            "IMAGE_OCR",
+                            "TOKENIZATION",
+                            "TRANSLATION",
+                            "CLAUSE_ANALYSIS",
+                            "GRAMMAR_EXPLANATION",
+                            "DETAILED_GRAMMAR"
+                        )
                         steps.forEach { step ->
                             FilterChip(
                                 selected = filterStep == step,
@@ -471,11 +481,12 @@ private fun ApiLogSummaryCard(
                 color = sumiInk.copy(alpha = 0.5f)
             )
             if (log.recordId != null || !log.stepName.isNullOrBlank() || log.attempt != null || log.elapsedMs != null) {
+                val stepDisplay = log.stepName?.let { apiStepLabel(it) } ?: stringResource(R.string.api_log_unknown_value)
                 Text(
                     text = stringResource(
                         R.string.api_log_summary_context,
                         log.recordId?.toString() ?: stringResource(R.string.api_log_unknown_value),
-                        log.stepName ?: stringResource(R.string.api_log_unknown_value),
+                        stepDisplay,
                         log.attempt?.toString() ?: stringResource(R.string.api_log_unknown_value),
                         log.elapsedMs?.toString() ?: stringResource(R.string.api_log_unknown_value)
                     ),
@@ -625,8 +636,9 @@ private fun ApiLogMetadataCard(log: ApiDebugLog, sumiInk: Color) {
             Text(stringResource(R.string.api_log_has_image, log.hasImage), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
             if (log.recordId != null || !log.stepName.isNullOrBlank() || log.attempt != null || log.elapsedMs != null) {
                 val unknown = stringResource(R.string.api_log_unknown_value)
+                val stepDisplay = log.stepName?.let { apiStepLabel(it) } ?: unknown
                 Text(stringResource(R.string.api_log_record, log.recordId?.toString() ?: unknown), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-                Text(stringResource(R.string.api_log_step, log.stepName ?: unknown), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
+                Text(stringResource(R.string.api_log_step, stepDisplay), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
                 Text(stringResource(R.string.api_log_attempt, log.attempt?.toString() ?: unknown), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
                 Text(stringResource(R.string.api_log_elapsed, log.elapsedMs?.toString() ?: unknown), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
             }
@@ -819,14 +831,28 @@ private fun apiStatusColor(status: String): Color {
 }
 
 @Composable
-private fun apiStepLabel(step: String): String {
+fun apiStepLabel(step: String): String {
     return when (step) {
         "ALL" -> stringResource(R.string.api_debug_filter_all)
-        "DETAILED_GRAMMAR" -> stringResource(R.string.step_detailed_grammar)
-        "CLAUSE_ANALYSIS", "CLAUSES" -> stringResource(R.string.step_clause_analysis)
-        "GRAMMAR_EXPLANATION", "GRAMMAR" -> stringResource(R.string.step_grammar_explanation)
+        "IMAGE_OCR" -> stringResource(R.string.step_image_ocr)
         "TOKENIZATION", "SEGMENTS" -> stringResource(R.string.step_tokenization)
         "TRANSLATION" -> stringResource(R.string.step_translation)
+        "CLAUSE_ANALYSIS", "CLAUSES" -> stringResource(R.string.step_clause_analysis)
+        "GRAMMAR_EXPLANATION", "GRAMMAR" -> stringResource(R.string.step_grammar_explanation)
+        "DETAILED_GRAMMAR" -> stringResource(R.string.step_detailed_grammar)
+        else -> step
+    }
+}
+
+fun apiStepLabel(context: Context, step: String): String {
+    return when (step) {
+        "ALL" -> context.getString(R.string.api_debug_filter_all)
+        "IMAGE_OCR" -> context.getString(R.string.step_image_ocr)
+        "TOKENIZATION", "SEGMENTS" -> context.getString(R.string.step_tokenization)
+        "TRANSLATION" -> context.getString(R.string.step_translation)
+        "CLAUSE_ANALYSIS", "CLAUSES" -> context.getString(R.string.step_clause_analysis)
+        "GRAMMAR_EXPLANATION", "GRAMMAR" -> context.getString(R.string.step_grammar_explanation)
+        "DETAILED_GRAMMAR" -> context.getString(R.string.step_detailed_grammar)
         else -> step
     }
 }

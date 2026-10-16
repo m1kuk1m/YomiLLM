@@ -918,10 +918,11 @@ class SettingsRepositoryImpl @Inject constructor(
             "prompt_segments" -> PromptManager.SYSTEM_PROMPT_SEGMENTS
             "prompt_clauses" -> PromptManager.SYSTEM_PROMPT_CLAUSES
             "prompt_grammar" -> PromptManager.SYSTEM_PROMPT_GRAMMAR
+            "prompt_image_ocr" -> PromptManager.SYSTEM_PROMPT_IMAGE_OCR
             "prompt_tokenizer" -> PromptManager.SYSTEM_PROMPT_TOKENIZER
             "prompt_tokenizer_ocr" -> PromptManager.SYSTEM_PROMPT_TOKENIZER_OCR
-            "prompt_tokenizer_image" -> PromptManager.SYSTEM_PROMPT_TOKENIZER_IMAGE
-            "prompt_tokenizer_image_repair" -> PromptManager.SYSTEM_PROMPT_TOKENIZER_IMAGE_REPAIR
+            "prompt_tokenizer_image" -> PromptManager.SYSTEM_PROMPT_IMAGE_OCR
+            "prompt_tokenizer_image_repair" -> PromptManager.SYSTEM_PROMPT_IMAGE_OCR
             else -> ""
         }
     }

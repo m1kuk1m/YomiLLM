@@ -155,12 +155,16 @@ fun ZenLoadingView(
 
 @Composable
 fun AnalysisStepTimeline(progress: AnalysisProgress?) {
-    val steps = listOf(
-        stringResource(R.string.step_1_title) to stringResource(R.string.step_1_desc),
-        stringResource(R.string.step_2_title) to stringResource(R.string.step_2_desc),
-        stringResource(R.string.step_3_title) to stringResource(R.string.step_3_desc),
-        stringResource(R.string.step_4_title) to stringResource(R.string.step_4_desc)
-    )
+    val isImageTask = progress?.isImageTask == true
+    val steps = buildList {
+        if (isImageTask) {
+            add(stringResource(R.string.module_image_ocr) to stringResource(R.string.step_image_ocr))
+        }
+        add(stringResource(R.string.step_1_title) to stringResource(R.string.step_1_desc))
+        add(stringResource(R.string.step_2_title) to stringResource(R.string.step_2_desc))
+        add(stringResource(R.string.step_3_title) to stringResource(R.string.step_3_desc))
+        add(stringResource(R.string.step_4_title) to stringResource(R.string.step_4_desc))
+    }
 
     // Fallback simulated progress when progress flow is null (e.g. initial loading/local parsing)
     var currentStepIndex by remember { mutableStateOf(0) }
@@ -187,12 +191,15 @@ fun AnalysisStepTimeline(progress: AnalysisProgress?) {
     )
 
     val firstUncompletedIndex = if (progress != null) {
-        val list = listOf(
-            progress.segmentsCompleted,
-            progress.clausesCompleted,
-            progress.translationCompleted,
-            progress.grammarCompleted
-        )
+        val list = buildList {
+            if (isImageTask) {
+                add(progress.imageOcrCompleted)
+            }
+            add(progress.segmentsCompleted)
+            add(progress.clausesCompleted)
+            add(progress.translationCompleted)
+            add(progress.grammarCompleted)
+        }
         list.indexOfFirst { !it }
     } else {
         currentStepIndex
@@ -204,12 +211,23 @@ fun AnalysisStepTimeline(progress: AnalysisProgress?) {
     ) {
         steps.forEachIndexed { index, (title, description) ->
             val isCompleted = if (progress != null) {
-                when (index) {
-                    0 -> progress.segmentsCompleted
-                    1 -> progress.clausesCompleted
-                    2 -> progress.translationCompleted
-                    3 -> progress.grammarCompleted
-                    else -> false
+                if (isImageTask) {
+                    when (index) {
+                        0 -> progress.imageOcrCompleted
+                        1 -> progress.segmentsCompleted
+                        2 -> progress.clausesCompleted
+                        3 -> progress.translationCompleted
+                        4 -> progress.grammarCompleted
+                        else -> false
+                    }
+                } else {
+                    when (index) {
+                        0 -> progress.segmentsCompleted
+                        1 -> progress.clausesCompleted
+                        2 -> progress.translationCompleted
+                        3 -> progress.grammarCompleted
+                        else -> false
+                    }
                 }
             } else {
                 index < currentStepIndex

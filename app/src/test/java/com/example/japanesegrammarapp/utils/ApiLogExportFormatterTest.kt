@@ -63,6 +63,17 @@ class ApiLogExportFormatterTest {
         assertTrue(output.contains("<redacted>"))
     }
 
+    @Test
+    fun formatAppliesCustomStepResolver() {
+        val output = ApiLogExportFormatter.format(
+            listOf(sampleLog().copy(stepName = "IMAGE_OCR")),
+            includeFullDebug = false,
+            stepResolver = { if (it == "IMAGE_OCR") "图片文字识别" else it }
+        )
+
+        assertTrue(output.contains("Step: 图片文字识别"))
+    }
+
     private fun sampleLog(): ApiDebugLog {
         return ApiDebugLog(
             time = "12:00:00.000",

@@ -293,4 +293,124 @@ class TextSelectionMathTest {
         // Row 1 is below Row 0 with 12px gap
         assertEquals(SelectionRect(20, 72, 370, 112), plan.placements[1].dstRect)
     }
+
+    @Test
+    fun sortSelectionRects_verticalColumnWithCommaOverlap_mergesIntoSingleBox() {
+        val part1 = SelectionRect(800, 100, 830, 300) // width=30, height=200
+        val part2 = SelectionRect(798, 285, 832, 600) // width=34, height=315 (15px overlap)
+
+        val sorted = sortSelectionRects(listOf(part2, part1))
+
+        assertEquals(1, sorted.size)
+        assertEquals(SelectionRect(798, 100, 832, 600), sorted[0])
+    }
+
+    @Test
+    fun sortSelectionRects_verticalColumnWithCommaSmallGap_mergesIntoSingleBox() {
+        val part1 = SelectionRect(800, 100, 830, 300) // width=30
+        val part2 = SelectionRect(800, 312, 830, 600) // gap=12px (<= 30 * 1.2 = 36px)
+
+        val sorted = sortSelectionRects(listOf(part1, part2))
+
+        assertEquals(1, sorted.size)
+        assertEquals(SelectionRect(800, 100, 830, 600), sorted[0])
+    }
+
+    @Test
+    fun sortSelectionRects_verticalDistinctParagraphs_notMerged() {
+        val para1 = SelectionRect(800, 100, 830, 300) // width=30
+        val para2 = SelectionRect(800, 450, 830, 650) // gap=150px (> 36px)
+
+        val sorted = sortSelectionRects(listOf(para2, para1))
+
+        assertEquals(2, sorted.size)
+        assertEquals(para1, sorted[0])
+        assertEquals(para2, sorted[1])
+    }
+
+    @Test
+    fun sortSelectionRects_verticalAdjacentColumns_notMerged() {
+        val col1 = SelectionRect(800, 100, 830, 600)
+        val col2 = SelectionRect(750, 100, 780, 600)
+
+        val sorted = sortSelectionRects(listOf(col2, col1))
+
+        assertEquals(2, sorted.size)
+        assertEquals(col1, sorted[0])
+        assertEquals(col2, sorted[1])
+    }
+
+    @Test
+    fun sortSelectionRects_horizontalLineWithComma_mergesIntoSingleRow() {
+        val part1 = SelectionRect(100, 200, 350, 230) // height=30
+        val part2 = SelectionRect(340, 198, 600, 232) // overlap=10px
+
+        val sorted = sortSelectionRects(listOf(part2, part1))
+
+        assertEquals(1, sorted.size)
+        assertEquals(SelectionRect(100, 198, 600, 232), sorted[0])
+    }
+
+    @Test
+    fun sortSelectionRects_denseAdjacentParallelVerticalColumns_neverMerged() {
+        // Simulates the exact user problem: two adjacent parallel columns on an e-reader
+        // that slightly overlap in X due to OCR unclip padding, but run parallel in Y
+        val col1 = SelectionRect(820, 200, 860, 700) // rightmost column
+        val col2 = SelectionRect(785, 195, 825, 705) // adjacent column, 5px X-overlap
+
+        val sorted = sortSelectionRects(listOf(col2, col1))
+
+        assertEquals(2, sorted.size)
+        assertEquals(col1, sorted[0])
+        assertEquals(col2, sorted[1])
+    }
+
+    @Test
+    fun sortSelectionRects_denseAdjacentParallelHorizontalRows_neverMerged() {
+        val row1 = SelectionRect(100, 100, 600, 135) // top row
+        val row2 = SelectionRect(98, 130, 602, 168)  // adjacent bottom row, 5px Y-overlap
+
+        val sorted = sortSelectionRects(listOf(row2, row1))
+
+        assertEquals(2, sorted.size)
+        assertEquals(row1, sorted[0])
+        assertEquals(row2, sorted[1])
+    }
+
+    @Test
+    fun sortSelectionRects_slantedTiltedVerticalColumn_mergesIntoSingleBox() {
+        // Simulates the exact user problem:
+        // Col 1: 彼女を筆頭に... (rightmost)
+        // Col 2: fractured by OCR into 'トリスと' (top, cx=125) and '続く。' (bottom, cx=140) due to 2.5 deg tilt
+        val col1 = SelectionRect(165, 200, 190, 500)
+        val col2Top = SelectionRect(115, 200, 135, 280) // 'トリスと'
+        val col2Bot = SelectionRect(130, 285, 150, 370) // '続く。'
+
+        val sorted = sortSelectionRects(listOf(col2Bot, col1, col2Top))
+
+        assertEquals(2, sorted.size)
+        assertEquals(col1, sorted[0])
+        assertEquals(SelectionRect(115, 200, 150, 370), sorted[1])
+
+        // Verify subline selection from col1 start to col2Bot end covers everything
+        val selected = calculateSubLineSelectionRects(
+            sorted,
+            TextHandleState(index = 0, offsetRatio = 0.0f),
+            TextHandleState(index = 1, offsetRatio = 1.0f)
+        )
+        assertEquals(2, selected.size)
+        assertEquals(col1, selected[0])
+        assertEquals(SelectionRect(115, 200, 150, 370), selected[1])
+    }
+
+    @Test
+    fun sortSelectionRects_slantedHorizontalRow_mergesIntoSingleRow() {
+        val rowLeft = SelectionRect(100, 100, 300, 130)
+        val rowRight = SelectionRect(305, 115, 500, 145) // 15px Y-shift due to tilt
+
+        val sorted = sortSelectionRects(listOf(rowRight, rowLeft))
+
+        assertEquals(1, sorted.size)
+        assertEquals(SelectionRect(100, 100, 500, 145), sorted[0])
+    }
 }

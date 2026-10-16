@@ -10,5 +10,8 @@ class PromptManagerTest {
         assertTrue(PromptManager.SYSTEM_PROMPT_TOKENIZER_IMAGE.contains("横書き（文字が横に並んでいる）の場合"))
         assertTrue(PromptManager.SYSTEM_PROMPT_TOKENIZER_IMAGE_REPAIR.contains("縦書き（文字が縦に積まれている）の場合"))
         assertTrue(PromptManager.SYSTEM_PROMPT_TOKENIZER_IMAGE_REPAIR.contains("横書き（文字が横に並んでいる）の場合"))
+        assertTrue(PromptManager.SYSTEM_PROMPT_IMAGE_OCR.contains("縦書き（文字が縦に積まれている）の場合"))
+        assertTrue(PromptManager.SYSTEM_PROMPT_IMAGE_OCR.contains("横書き（文字が横に並んでいる）の場合"))
+        assertTrue(PromptManager.SYSTEM_PROMPT_IMAGE_OCR.contains("振仮名（ルビ）の除外"))
     }
 }

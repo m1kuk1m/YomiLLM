@@ -12,6 +12,7 @@ import com.example.japanesegrammarapp.domain.model.TokenizationResult
 import com.example.japanesegrammarapp.domain.repository.DetailedResultSerializer
 import com.example.japanesegrammarapp.domain.repository.HistoryRepository
 import com.example.japanesegrammarapp.domain.repository.ImageAttachmentLoader
+import com.example.japanesegrammarapp.domain.repository.ImagePayload
 import com.example.japanesegrammarapp.domain.repository.LlmAnalysisService
 import com.example.japanesegrammarapp.domain.repository.LlmApiConfig
 import com.example.japanesegrammarapp.domain.repository.LlmResultMetadata
@@ -104,17 +105,128 @@ class AnalysisTaskManagerTest {
         assertFalse(manager.progressFlow.value.containsKey(id))
     }
 
+    @Test
+    fun executeWithImageAttachmentPerformsImageOcrAndFeedsTextToDownstreamSteps() = runBlocking {
+        val history = FakeHistoryRepository()
+        val llm = FakeLlmAnalysisService(ocrResult = "画像から抽出した日本語")
+        val imageLoader = FakeImageAttachmentLoader(ImagePayload("dummyBase64", "image/png"))
+        val manager = newManager(history = history, llm = llm, imageLoader = imageLoader)
+
+        val id = manager.execute(
+            text = "",
+            imageUri = "content://media/test_image",
+            provider = "Gemini",
+            modelName = "gemini-test",
+            baseUrl = "https://example.test",
+            apiKey = "key"
+        )
+
+        waitUntil { history.getRecordById(id)?.status == AnalysisStatus.COMPLETED }
+        val record = checkNotNull(history.getRecordById(id))
+
+        assertEquals(1, llm.ocrCalls)
+        assertEquals(1, llm.tokenizerCalls)
+        assertEquals("画像から抽出した日本語", llm.lastTokenizerText)
+        assertEquals(null, llm.lastTokenizerImageBase64)
+        assertEquals("画像から抽出した日本語", record.originalText)
+        assertEquals(AnalysisStatus.COMPLETED, record.status)
+        assertFalse(manager.progressFlow.value.containsKey(id))
+    }
+
+    @Test
+    fun executeWithImageAttachmentFailsFastWhenImageOcrFails() = runBlocking {
+        val history = FakeHistoryRepository()
+        val llm = FakeLlmAnalysisService(failOcr = true)
+        val imageLoader = FakeImageAttachmentLoader(ImagePayload("dummyBase64", "image/png"))
+        val manager = newManager(history = history, llm = llm, imageLoader = imageLoader)
+
+        val id = manager.execute(
+            text = "",
+            imageUri = "content://media/test_image",
+            provider = "Gemini",
+            modelName = "gemini-test",
+            baseUrl = "https://example.test",
+            apiKey = "key"
+        )
+
+        waitUntil { history.getRecordById(id)?.status == AnalysisStatus.FAILED }
+        val record = checkNotNull(history.getRecordById(id))
+
+        assertEquals(1, llm.ocrCalls)
+        assertEquals(0, llm.tokenizerCalls)
+        assertEquals(AnalysisStatus.FAILED, record.status)
+        assertTrue(record.errorMessage.orEmpty().contains("image ocr failed"))
+        assertFalse(manager.progressFlow.value.containsKey(id))
+    }
+
+    @Test
+    fun executeWithImageAttachmentFailsFastWhenImageOcrReturnsEmptyText() = runBlocking {
+        val history = FakeHistoryRepository()
+        val llm = FakeLlmAnalysisService(ocrResult = "   ")
+        val imageLoader = FakeImageAttachmentLoader(ImagePayload("dummyBase64", "image/png"))
+        val manager = newManager(history = history, llm = llm, imageLoader = imageLoader)
+
+        val id = manager.execute(
+            text = "",
+            imageUri = "content://media/test_image",
+            provider = "Gemini",
+            modelName = "gemini-test",
+            baseUrl = "https://example.test",
+            apiKey = "key"
+        )
+
+        waitUntil { history.getRecordById(id)?.status == AnalysisStatus.FAILED }
+        val record = checkNotNull(history.getRecordById(id))
+
+        assertEquals(1, llm.ocrCalls)
+        assertEquals(0, llm.tokenizerCalls)
+        assertEquals(AnalysisStatus.FAILED, record.status)
+        assertTrue(record.errorMessage.orEmpty().contains("未能从图片中识别出有效日文内容"))
+        assertFalse(manager.progressFlow.value.containsKey(id))
+    }
+
+    @Test
+    fun executeWithImageAttachmentDeduplicatesWhenRecognizedTextMatchesExistingRecord() = runBlocking {
+        val history = FakeHistoryRepository(
+            AnalysisDomainRecord(
+                id = 99,
+                originalText = "既存テキスト",
+                modelUsed = "Gemini: gemini-test",
+                status = AnalysisStatus.COMPLETED
+            )
+        )
+        val llm = FakeLlmAnalysisService(ocrResult = "既存テキスト")
+        val imageLoader = FakeImageAttachmentLoader(ImagePayload("dummyBase64", "image/png"))
+        val manager = newManager(history = history, llm = llm, imageLoader = imageLoader)
+
+        val id = manager.execute(
+            text = "",
+            imageUri = "content://media/test_image",
+            provider = "Gemini",
+            modelName = "gemini-test",
+            baseUrl = "https://example.test",
+            apiKey = "key"
+        )
+
+        waitUntil { history.getRecordById(id) == null && !manager.progressFlow.value.containsKey(id) }
+
+        assertEquals(1, llm.ocrCalls)
+        assertEquals(0, llm.tokenizerCalls)
+        assertEquals(AnalysisStatus.COMPLETED, history.getRecordById(99)?.status)
+    }
+
     private fun newManager(
         history: FakeHistoryRepository,
         llm: FakeLlmAnalysisService = FakeLlmAnalysisService(),
-        settings: FakeSettingsRepository = FakeSettingsRepository()
+        settings: FakeSettingsRepository = FakeSettingsRepository(),
+        imageLoader: FakeImageAttachmentLoader = FakeImageAttachmentLoader()
     ): DefaultAnalysisTaskManager {
         val eventBus = AnalysisEventBus()
         return DefaultAnalysisTaskManager(
             saveAnalysisRecordUseCase = SaveAnalysisRecordUseCase(history),
             getOcrTextUseCase = GetOcrTextUseCase(
                 ocrRepository = FakeOcrRepository(),
-                imageLoader = FakeImageAttachmentLoader(),
+                imageLoader = imageLoader,
                 eventBus = eventBus
             ),
             llmAnalysisService = llm,
@@ -141,9 +253,30 @@ private object NoOpAppLogWriter : AppLogWriter {
 
 private class FakeLlmAnalysisService(
     private val delayMs: Long = 0,
-    private val failTranslation: Boolean = false
+    private val failTranslation: Boolean = false,
+    private val failOcr: Boolean = false,
+    private val ocrResult: String = "認識された日本語テキスト"
 ) : LlmAnalysisService {
+    var ocrCalls = 0
     var tokenizerCalls = 0
+    var lastTokenizerText: String? = null
+    var lastTokenizerImageBase64: String? = null
+
+    override suspend fun executeImageOcr(
+        imageBase64: String,
+        mimeType: String?,
+        primaryConfigs: List<LlmApiConfig>,
+        backupConfigs: List<LlmApiConfig>,
+        onRetry: (attempt: Int) -> Unit,
+        onBackup: (backupProvider: String) -> Unit,
+        recordId: Int?,
+        stepName: String?
+    ): kotlinx.coroutines.flow.Flow<Pair<String?, LlmResultMetadata>> = kotlinx.coroutines.flow.flow {
+        ocrCalls++
+        if (failOcr) error("image ocr failed")
+        if (delayMs > 0) delay(delayMs)
+        emit(ocrResult to metadata())
+    }
 
     override suspend fun executeTokenizer(
         text: String,
@@ -159,6 +292,8 @@ private class FakeLlmAnalysisService(
         stepName: String?
     ): kotlinx.coroutines.flow.Flow<Pair<TokenizationResult?, LlmResultMetadata>> = kotlinx.coroutines.flow.flow {
         tokenizerCalls++
+        lastTokenizerText = text
+        lastTokenizerImageBase64 = imageBase64
         if (delayMs > 0) delay(delayMs)
         emit(TokenizationResult(tokens = text.toList().map { it.toString() }) to metadata())
     }
@@ -438,6 +573,8 @@ private class FakeOcrRepository : OcrRepository {
     override suspend fun extractTextFromImage(imageUri: String): String = ""
 }
 
-private class FakeImageAttachmentLoader : ImageAttachmentLoader {
-    override suspend fun loadAsBase64(uriString: String) = null
+private class FakeImageAttachmentLoader(
+    private val payload: ImagePayload? = null
+) : ImageAttachmentLoader {
+    override suspend fun loadAsBase64(uriString: String): ImagePayload? = payload
 }

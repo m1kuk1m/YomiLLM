@@ -249,9 +249,10 @@ fun ImageCropReviewLayout(
     var selectedOcrBoxIndex by remember(bitmap, ocrBoxDetectionSettings) { mutableStateOf<Int?>(null) }
     var editingOcrBoxIndex by remember(bitmap, ocrBoxDetectionSettings) { mutableStateOf<Int?>(null) }
     var userSelectionMade by remember(bitmap, ocrBoxDetectionSettings) { mutableStateOf(false) }
+    var isCropCleared by remember(bitmap, ocrBoxDetectionSettings) { mutableStateOf(false) }
 
     val unselectedBoxesAlpha by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (userSelectionMade) 0f else 1f,
+        targetValue = if (userSelectionMade || isCropCleared) 0f else 1f,
         animationSpec = androidx.compose.animation.core.tween(
             durationMillis = 300,
             easing = androidx.compose.animation.core.EaseInOutCubic
@@ -274,6 +275,7 @@ fun ImageCropReviewLayout(
                 }
                 editingOcrBoxIndex = null
                 userSelectionMade = false
+                isCropCleared = false
             } else {
                 val fineBoxes = detectFineGrainedCameraOcrBoxes(
                     bitmap = bitmap,
@@ -285,6 +287,7 @@ fun ImageCropReviewLayout(
                 textSelectStart = null
                 textSelectEnd = null
                 userSelectionMade = false
+                isCropCleared = false
             }
         } catch (e: Exception) {
             AppLogger.e("CAMERA", "Failed to detect OCR text boxes", e)
@@ -293,6 +296,7 @@ fun ImageCropReviewLayout(
                 hideOcrBoxes = true
                 selectedOcrBoxIndex = null
                 userSelectionMade = false
+                isCropCleared = false
             }
         }
     }
@@ -343,6 +347,7 @@ fun ImageCropReviewLayout(
         selectedOcrBoxIndex = index
         editingOcrBoxIndex = index
         userSelectionMade = true
+        isCropCleared = false
     }
 
     fun commitEditedOcrBox(index: Int) {
@@ -425,6 +430,8 @@ fun ImageCropReviewLayout(
                                     var activeTextHandle: String? = null
                                     var lockedBoxIndex = 0
                                     var isPendingDisambiguation = false
+                                    var handleGrabOffsetX = 0f
+                                    var handleGrabOffsetY = 0f
                                     cropState.activeHandle = DragHandle.NONE
                                     
                                     if (interactionMode == CropInteraction.TEXT_SELECT) {
@@ -482,6 +489,26 @@ fun ImageCropReviewLayout(
                                                     activeTextHandle = "END"
                                                     handleGrabbed = true
                                                     lockedBoxIndex = orderedEnd.index
+                                                }
+
+                                                if (handleGrabbed) {
+                                                    val grabbedHandle = if (activeTextHandle == "START") orderedStart else orderedEnd
+                                                    val box = detectedBoxes.getOrNull(lockedBoxIndex)
+                                                    if (box != null) {
+                                                        val isVert = box.height() > box.width()
+                                                        val anchorX = if (isVert) {
+                                                            cropState.imgOffsetX + (box.left + box.right) / 2f * cropState.scaleFactor
+                                                        } else {
+                                                            cropState.imgOffsetX + (box.left + box.width() * grabbedHandle.offsetRatio) * cropState.scaleFactor
+                                                        }
+                                                        val anchorY = if (isVert) {
+                                                            cropState.imgOffsetY + (box.top + box.height() * grabbedHandle.offsetRatio) * cropState.scaleFactor
+                                                        } else {
+                                                            cropState.imgOffsetY + (box.top + box.bottom) / 2f * cropState.scaleFactor
+                                                        }
+                                                        handleGrabOffsetX = startPos.x - anchorX
+                                                        handleGrabOffsetY = startPos.y - anchorY
+                                                    }
                                                 }
                                             }
 
@@ -544,7 +571,17 @@ fun ImageCropReviewLayout(
                                         var minDist = Float.MAX_VALUE
                                         val edgeTolerance = 24.dp.toPx()
 
-                                        if (userSelectionMade || hideOcrBoxes) {
+                                        if (isCropCleared) {
+                                            targetBoxIndex = null
+                                            targetHandle = DragHandle.NONE
+                                            isFreeformDrawing = true
+                                            tapAction = {
+                                                isCropCleared = true
+                                                userSelectionMade = false
+                                                selectedOcrBoxIndex = null
+                                                editingOcrBoxIndex = null
+                                            }
+                                        } else if (userSelectionMade || hideOcrBoxes) {
                                             val cropL = cropState.cropLeft
                                             val cropT = cropState.cropTop
                                             val cropR = cropState.cropRight
@@ -590,11 +627,11 @@ fun ImageCropReviewLayout(
 
                                             // 4. Outside active box
                                             if (targetHandle == DragHandle.NONE && !isInsideActiveCrop) {
-                                                if (userSelectionMade && detectedBoxes.isNotEmpty()) {
-                                                    tapAction = {
-                                                        userSelectionMade = false
-                                                        editingOcrBoxIndex = null
-                                                    }
+                                                tapAction = {
+                                                    isCropCleared = true
+                                                    userSelectionMade = false
+                                                    selectedOcrBoxIndex = null
+                                                    editingOcrBoxIndex = null
                                                 }
                                                 isFreeformDrawing = true
                                             }
@@ -662,10 +699,16 @@ fun ImageCropReviewLayout(
 
                                                 if (interiorIndex != null) {
                                                     targetBoxIndex = interiorIndex
-                                                    tapAction = { selectedOcrBoxIndex = interiorIndex }
+                                                    tapAction = { setCropStateFromOcrBox(interiorIndex) }
                                                     targetHandle = DragHandle.CENTER
                                                 } else {
                                                     isFreeformDrawing = true
+                                                    tapAction = {
+                                                        isCropCleared = true
+                                                        userSelectionMade = false
+                                                        selectedOcrBoxIndex = null
+                                                        editingOcrBoxIndex = null
+                                                    }
                                                 }
                                             }
                                         }
@@ -693,9 +736,13 @@ fun ImageCropReviewLayout(
                                                         val w = cropState.cropRight - cropState.cropLeft
                                                         val h = cropState.cropBottom - cropState.cropTop
                                                         if (w < minSizePx || h < minSizePx) {
-                                                            if (detectedBoxes.isNotEmpty()) {
-                                                                userSelectionMade = false
-                                                            }
+                                                            isCropCleared = true
+                                                            userSelectionMade = false
+                                                            selectedOcrBoxIndex = null
+                                                        } else {
+                                                            isCropCleared = false
+                                                            userSelectionMade = true
+                                                            selectedOcrBoxIndex = null
                                                         }
                                                     }
                                                 }
@@ -758,48 +805,71 @@ fun ImageCropReviewLayout(
                                                     val curBox = detectedBoxes.getOrNull(lockedBoxIndex) ?: detectedBoxes[allowedIndices.first()]
                                                     val isVertical = curBox.height() > curBox.width()
 
-                                                    val R = 10.dp.toPx()
-                                                    val D = R * 1.414f
-
-                                                    // Compensate for teardrop visual offset
-                                                    val effectiveTouchPos = if (isVertical) {
-                                                        val xOffset = if (activeTextHandle == "START") D else -D
-                                                        Offset(currentPos.x - xOffset, currentPos.y)
-                                                    } else {
-                                                        Offset(currentPos.x, currentPos.y - R)
-                                                    }
-
-                                                    // Check line hysteresis
-                                                    val curLeft = cropState.imgOffsetX + curBox.left * cropState.scaleFactor
-                                                    val curTop = cropState.imgOffsetY + curBox.top * cropState.scaleFactor
-                                                    val curRight = cropState.imgOffsetX + curBox.right * cropState.scaleFactor
-                                                    val curBottom = cropState.imgOffsetY + curBox.bottom * cropState.scaleFactor
+                                                    val effectiveTouchPos = Offset(currentPos.x - handleGrabOffsetX, currentPos.y - handleGrabOffsetY)
 
                                                     val targetIdx = if (isVertical) {
-                                                        val colWidth = curRight - curLeft
-                                                        val hysteresisX = maxOf(20.dp.toPx(), colWidth * 0.65f)
-                                                        if (effectiveTouchPos.x in (curLeft - hysteresisX)..(curRight + hysteresisX)) {
-                                                            lockedBoxIndex
+                                                        val colWidth = (curBox.right - curBox.left) * cropState.scaleFactor
+                                                        val deadbandX = minOf(6.dp.toPx(), maxOf(4.dp.toPx(), colWidth * 0.25f))
+
+                                                        fun columnCost(idx: Int): Float {
+                                                            val b = detectedBoxes[idx]
+                                                            val bL = cropState.imgOffsetX + b.left * cropState.scaleFactor
+                                                            val bR = cropState.imgOffsetX + b.right * cropState.scaleFactor
+                                                            val bT = cropState.imgOffsetY + b.top * cropState.scaleFactor
+                                                            val bB = cropState.imgOffsetY + b.bottom * cropState.scaleFactor
+                                                            val bCenterX = (bL + bR) / 2f
+
+                                                            val distX = kotlin.math.abs(effectiveTouchPos.x - bCenterX)
+                                                            val distY = if (effectiveTouchPos.y < bT) {
+                                                                bT - effectiveTouchPos.y
+                                                            } else if (effectiveTouchPos.y > bB) {
+                                                                effectiveTouchPos.y - bB
+                                                            } else {
+                                                                0f
+                                                            }
+                                                            return distX + distY * 0.4f
+                                                        }
+
+                                                        val curCost = columnCost(lockedBoxIndex)
+                                                        val bestCandidate = allowedIndices.minByOrNull { columnCost(it) } ?: lockedBoxIndex
+                                                        val bestCost = columnCost(bestCandidate)
+
+                                                        if (bestCandidate != lockedBoxIndex && bestCost + deadbandX < curCost) {
+                                                            bestCandidate
                                                         } else {
-                                                            allowedIndices.minByOrNull { i ->
-                                                                val b = detectedBoxes[i]
-                                                                val bL = cropState.imgOffsetX + b.left * cropState.scaleFactor
-                                                                val bR = cropState.imgOffsetX + b.right * cropState.scaleFactor
-                                                                maxOf(0f, maxOf(bL - effectiveTouchPos.x, effectiveTouchPos.x - bR))
-                                                            } ?: lockedBoxIndex
+                                                            lockedBoxIndex
                                                         }
                                                     } else {
-                                                        val rowHeight = curBottom - curTop
-                                                        val hysteresisY = maxOf(16.dp.toPx(), rowHeight * 0.65f)
-                                                        if (effectiveTouchPos.y in (curTop - hysteresisY)..(curBottom + hysteresisY)) {
-                                                            lockedBoxIndex
+                                                        val rowHeight = (curBox.bottom - curBox.top) * cropState.scaleFactor
+                                                        val deadbandY = minOf(6.dp.toPx(), maxOf(4.dp.toPx(), rowHeight * 0.25f))
+
+                                                        fun rowCost(idx: Int): Float {
+                                                            val b = detectedBoxes[idx]
+                                                            val bL = cropState.imgOffsetX + b.left * cropState.scaleFactor
+                                                            val bR = cropState.imgOffsetX + b.right * cropState.scaleFactor
+                                                            val bT = cropState.imgOffsetY + b.top * cropState.scaleFactor
+                                                            val bB = cropState.imgOffsetY + b.bottom * cropState.scaleFactor
+                                                            val bCenterY = (bT + bB) / 2f
+
+                                                            val distY = kotlin.math.abs(effectiveTouchPos.y - bCenterY)
+                                                            val distX = if (effectiveTouchPos.x < bL) {
+                                                                bL - effectiveTouchPos.x
+                                                            } else if (effectiveTouchPos.x > bR) {
+                                                                effectiveTouchPos.x - bR
+                                                            } else {
+                                                                0f
+                                                            }
+                                                            return distY + distX * 0.4f
+                                                        }
+
+                                                        val curCost = rowCost(lockedBoxIndex)
+                                                        val bestCandidate = allowedIndices.minByOrNull { rowCost(it) } ?: lockedBoxIndex
+                                                        val bestCost = rowCost(bestCandidate)
+
+                                                        if (bestCandidate != lockedBoxIndex && bestCost + deadbandY < curCost) {
+                                                            bestCandidate
                                                         } else {
-                                                            allowedIndices.minByOrNull { i ->
-                                                                val b = detectedBoxes[i]
-                                                                val bT = cropState.imgOffsetY + b.top * cropState.scaleFactor
-                                                                val bB = cropState.imgOffsetY + b.bottom * cropState.scaleFactor
-                                                                maxOf(0f, maxOf(bT - effectiveTouchPos.y, effectiveTouchPos.y - bB))
-                                                            } ?: lockedBoxIndex
+                                                            lockedBoxIndex
                                                         }
                                                     }
                                                     lockedBoxIndex = targetIdx
@@ -873,6 +943,7 @@ fun ImageCropReviewLayout(
                                                         cropState.cropRight = maxOf(startPos.x, currentPos.x).coerceIn(imgLeft, imgRight)
                                                         cropState.cropBottom = maxOf(startPos.y, currentPos.y).coerceIn(imgTop, imgBottom)
                                                         userSelectionMade = true
+                                                        isCropCleared = false
                                                         selectedOcrBoxIndex = null
                                                         editingOcrBoxIndex = null
                                                         targetBoxIndex = null
@@ -1066,6 +1137,19 @@ fun ImageCropReviewLayout(
                                 drawTeardrop(orderedStart, true)
                                 drawTeardrop(orderedEnd, false)
                             }
+                        }
+                    } else if (isCropCleared && !isDragging) {
+                        // Global subtle dimming mask over full image, waiting for user to drag and draw
+                        val imageLeft = cropState.imgOffsetX
+                        val imageTop = cropState.imgOffsetY
+                        val imageWidth = cropState.imgDispWidth
+                        val imageHeight = cropState.imgDispHeight
+                        if (imageWidth > 0f && imageHeight > 0f) {
+                            drawRect(
+                                color = Color.Black.copy(alpha = 0.24f),
+                                topLeft = Offset(imageLeft, imageTop),
+                                size = Size(imageWidth, imageHeight)
+                            )
                         }
                     } else if (hideOcrBoxes) {
                         // Draw dimming mask outside crop box bounds
@@ -1529,11 +1613,15 @@ fun ImageCropReviewLayout(
                                     onConfirm(bitmap)
                                 }
                             } else {
-                                val selectedIndex = selectedOcrBoxIndex
-                                if (!userSelectionMade && !hideOcrBoxes && selectedIndex != null && selectedIndex in detectedBoxes.indices) {
-                                    confirmOcrBox(detectedBoxes[selectedIndex])
+                                if (isCropCleared) {
+                                    onConfirm(bitmap)
                                 } else {
-                                    confirmCurrentCrop()
+                                    val selectedIndex = selectedOcrBoxIndex
+                                    if (!userSelectionMade && !hideOcrBoxes && selectedIndex != null && selectedIndex in detectedBoxes.indices) {
+                                        confirmOcrBox(detectedBoxes[selectedIndex])
+                                    } else {
+                                        confirmCurrentCrop()
+                                    }
                                 }
                             }
                         },

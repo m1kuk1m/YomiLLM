@@ -19,6 +19,7 @@ import com.example.japanesegrammarapp.domain.model.ReasoningLevel
 import com.example.japanesegrammarapp.domain.model.ComponentReasoningLevel
 import com.example.japanesegrammarapp.R
 import com.example.japanesegrammarapp.ui.screens.moduleDisplayName
+import com.example.japanesegrammarapp.ui.screens.apiStepLabel
 import com.example.japanesegrammarapp.utils.ApiDebugLog
 import com.example.japanesegrammarapp.utils.ApiLogExportFormatter
 import com.example.japanesegrammarapp.utils.AppLogger
@@ -670,9 +671,12 @@ class SettingsViewModel @Inject constructor(
     fun shareApiLogs(logs: List<ApiDebugLog>, includeFull: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val formattedLogs = ApiLogExportFormatter.format(logs, includeFull) {
-                    moduleDisplayName(application, it)
-                }
+                val formattedLogs = ApiLogExportFormatter.format(
+                    logs = logs,
+                    includeFullDebug = includeFull,
+                    labelResolver = { moduleDisplayName(application, it) },
+                    stepResolver = { apiStepLabel(application, it) }
+                )
                 val tempFile = File(application.cacheDir, "exports/api_logs_export.txt")
                 tempFile.parentFile?.mkdirs()
                 tempFile.writeText(formattedLogs)
@@ -832,16 +836,7 @@ class SettingsViewModel @Inject constructor(
                 // are still at their built-in default are absent from the map.
                 // We call settingsRepository.getCustomPrompt() for every known
                 // key so the export file always contains all 8 prompts.
-                val allKeys = listOf(
-                    "prompt_translation",
-                    "prompt_segments",
-                    "prompt_clauses",
-                    "prompt_grammar",
-                    "prompt_tokenizer",
-                    "prompt_tokenizer_ocr",
-                    "prompt_tokenizer_image",
-                    "prompt_tokenizer_image_repair"
-                )
+                val allKeys = com.example.japanesegrammarapp.domain.model.AnalysisModule.entries.map { it.promptKey }
 
                 // Switch the active preset to each target preset temporarily so
                 // getCustomPrompt() resolves against the correct preset's storage.

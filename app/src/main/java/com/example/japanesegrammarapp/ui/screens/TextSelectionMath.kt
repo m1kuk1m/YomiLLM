@@ -48,6 +48,30 @@ fun isHandleAfter(h1: TextHandleState, h2: TextHandleState): Boolean {
     }
 }
 
+enum class SnapEndpoint {
+    START,
+    END
+}
+
+data class SnapBoundary(
+    val boxIndex: Int,
+    val endpoint: SnapEndpoint
+)
+
+data class BoundarySnapStepResult(
+    val offsetRatio: Float,
+    val activeSnappedBoundary: SnapBoundary?,
+    val suppressedBoundaries: Set<SnapBoundary>
+)
+
+fun boundaryAtHandle(handle: TextHandleState): SnapBoundary? {
+    return when {
+        handle.offsetRatio <= 0.0f -> SnapBoundary(handle.index, SnapEndpoint.START)
+        handle.offsetRatio >= 1.0f -> SnapBoundary(handle.index, SnapEndpoint.END)
+        else -> null
+    }
+}
+
 fun snapOffsetRatio(ratio: Float, threshold: Float = 0.06f): Float {
     return when {
         ratio <= threshold -> 0.0f
@@ -55,6 +79,76 @@ fun snapOffsetRatio(ratio: Float, threshold: Float = 0.06f): Float {
         else -> ratio.coerceIn(0.0f, 1.0f)
     }
 }
+
+fun evaluateBoundarySnap(
+    boxIndex: Int,
+    rawOffsetRatio: Float,
+    threshold: Float = 0.06f,
+    initialGrabbedBoundary: SnapBoundary? = null,
+    activeSnappedBoundary: SnapBoundary? = null,
+    suppressedBoundaries: Set<SnapBoundary> = emptySet()
+): BoundarySnapStepResult {
+    var updatedSuppressed = suppressedBoundaries
+    var currentActiveSnap = activeSnappedBoundary
+
+    // 1. If the drag started on an already-snapped boundary endpoint (from a previous snap
+    // or full-line tap), dragging inward away from that endpoint immediately cancels its snap.
+    if (initialGrabbedBoundary != null && initialGrabbedBoundary !in updatedSuppressed) {
+        val movedAwayFromInitialEndpoint = boxIndex != initialGrabbedBoundary.boxIndex ||
+            when (initialGrabbedBoundary.endpoint) {
+                SnapEndpoint.START -> rawOffsetRatio > 0.0f
+                SnapEndpoint.END -> rawOffsetRatio < 1.0f
+            }
+        if (movedAwayFromInitialEndpoint) {
+            updatedSuppressed = updatedSuppressed + initialGrabbedBoundary
+            if (currentActiveSnap == initialGrabbedBoundary) {
+                currentActiveSnap = null
+            }
+        }
+    }
+
+    // 2. If a boundary snap was triggered during the current continuous drag,
+    // pulling back out of its snap zone cancels that boundary's snap.
+    if (currentActiveSnap != null) {
+        val exitedSnapZone = boxIndex != currentActiveSnap.boxIndex ||
+            when (currentActiveSnap.endpoint) {
+                SnapEndpoint.START -> rawOffsetRatio > threshold
+                SnapEndpoint.END -> rawOffsetRatio < 1.0f - threshold
+            }
+        if (exitedSnapZone) {
+            updatedSuppressed = updatedSuppressed + currentActiveSnap
+        }
+    }
+
+    // 3. Apply boundary snap only if the boundary has not been suppressed.
+    val startBoundary = SnapBoundary(boxIndex, SnapEndpoint.START)
+    val endBoundary = SnapBoundary(boxIndex, SnapEndpoint.END)
+
+    return when {
+        rawOffsetRatio <= threshold && startBoundary !in updatedSuppressed -> {
+            BoundarySnapStepResult(
+                offsetRatio = 0.0f,
+                activeSnappedBoundary = startBoundary,
+                suppressedBoundaries = updatedSuppressed
+            )
+        }
+        rawOffsetRatio >= 1.0f - threshold && endBoundary !in updatedSuppressed -> {
+            BoundarySnapStepResult(
+                offsetRatio = 1.0f,
+                activeSnappedBoundary = endBoundary,
+                suppressedBoundaries = updatedSuppressed
+            )
+        }
+        else -> {
+            BoundarySnapStepResult(
+                offsetRatio = rawOffsetRatio.coerceIn(0.0f, 1.0f),
+                activeSnappedBoundary = null,
+                suppressedBoundaries = updatedSuppressed
+            )
+        }
+    }
+}
+
 
 fun mergeCollinearVerticalColumn(boxes: List<SelectionRect>): List<SelectionRect> {
     if (boxes.size <= 1) return boxes

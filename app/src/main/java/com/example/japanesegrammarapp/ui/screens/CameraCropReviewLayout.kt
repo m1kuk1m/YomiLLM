@@ -240,6 +240,7 @@ fun ImageCropReviewLayout(
     }
     var textSelectStart by remember { mutableStateOf<TextHandleState?>(null) }
     var textSelectEnd by remember { mutableStateOf<TextHandleState?>(null) }
+    var suppressedSnapBoundaries by remember { mutableStateOf<Set<SnapBoundary>>(emptySet()) }
     var magnifierPosition by remember { mutableStateOf<Offset?>(null) }
     var magnifierSource by remember { mutableStateOf<Offset?>(null) }
     var isDragging by remember { mutableStateOf(false) }
@@ -295,6 +296,7 @@ fun ImageCropReviewLayout(
                 hideOcrBoxes = false
                 textSelectStart = null
                 textSelectEnd = null
+                suppressedSnapBoundaries = emptySet()
                 userSelectionMade = false
                 isCropCleared = false
             }
@@ -441,6 +443,10 @@ fun ImageCropReviewLayout(
                                     var isPendingDisambiguation = false
                                     var handleGrabOffsetX = 0f
                                     var handleGrabOffsetY = 0f
+                                    var initialGrabbedBoundary: SnapBoundary? = null
+                                    var activeSnappedBoundary: SnapBoundary? = null
+                                    var initialOrderedStart: TextHandleState? = null
+                                    var initialOrderedEnd: TextHandleState? = null
                                     cropState.activeHandle = DragHandle.NONE
                                     
                                     if (interactionMode == CropInteraction.TEXT_SELECT) {
@@ -479,6 +485,8 @@ fun ImageCropReviewLayout(
 
                                             if (textSelectStart != null && textSelectEnd != null) {
                                                 val (orderedStart, orderedEnd) = getOrderedHandles(textSelectStart!!, textSelectEnd!!)
+                                                initialOrderedStart = orderedStart
+                                                initialOrderedEnd = orderedEnd
                                                 val startCenter = getHandlePos(orderedStart, true)
                                                 val endCenter = getHandlePos(orderedEnd, false)
                                                 val distStart = distance(startPos.x, startPos.y, startCenter.x, startCenter.y)
@@ -502,6 +510,7 @@ fun ImageCropReviewLayout(
 
                                                 if (handleGrabbed) {
                                                     val grabbedHandle = if (activeTextHandle == "START") orderedStart else orderedEnd
+                                                    initialGrabbedBoundary = boundaryAtHandle(grabbedHandle)
                                                     val box = detectedBoxes.getOrNull(lockedBoxIndex)
                                                     if (box != null) {
                                                         val isVert = box.height() > box.width()
@@ -558,11 +567,13 @@ fun ImageCropReviewLayout(
                                                         val displayWidth = initialBox.width() * cropState.scaleFactor
                                                         if (displayWidth > 0) ((startPos.x - displayLeft) / displayWidth).coerceIn(0f, 1f) else 0f
                                                     }
+                                                    suppressedSnapBoundaries = emptySet()
                                                     textSelectStart = TextHandleState(closestIdx, initialOffsetRatio)
                                                     textSelectEnd = TextHandleState(closestIdx, initialOffsetRatio)
                                                     activeTextHandle = "END"
                                                     lockedBoxIndex = closestIdx
                                                     tapAction = {
+                                                        suppressedSnapBoundaries = emptySet()
                                                         textSelectStart = TextHandleState(closestIdx, 0f)
                                                         textSelectEnd = TextHandleState(closestIdx, 1f)
                                                         activeTextHandle = null
@@ -570,6 +581,7 @@ fun ImageCropReviewLayout(
                                                     }
                                                 } else {
                                                     tapAction = {
+                                                        suppressedSnapBoundaries = emptySet()
                                                         textSelectStart = null
                                                         textSelectEnd = null
                                                         activeTextHandle = null
@@ -794,6 +806,8 @@ fun ImageCropReviewLayout(
                                                         if (kotlin.math.abs(primaryDelta) > dragSlopPx / 2f) {
                                                             activeTextHandle = if (primaryDelta > 0) "END" else "START"
                                                             isPendingDisambiguation = false
+                                                            val resolvedGrabbed = if (activeTextHandle == "START") initialOrderedStart else initialOrderedEnd
+                                                            initialGrabbedBoundary = resolvedGrabbed?.let { boundaryAtHandle(it) }
                                                         }
                                                     }
 
@@ -898,7 +912,17 @@ fun ImageCropReviewLayout(
                                                     } else {
                                                         if (activeWidth > 0) ((effectiveTouchPos.x - activeLeft) / activeWidth) else 0f
                                                     }
-                                                    val offsetRatio = snapOffsetRatio(rawOffsetRatio, 0.06f)
+                                                    val snapResult = evaluateBoundarySnap(
+                                                        boxIndex = lockedBoxIndex,
+                                                        rawOffsetRatio = rawOffsetRatio,
+                                                        threshold = 0.06f,
+                                                        initialGrabbedBoundary = initialGrabbedBoundary,
+                                                        activeSnappedBoundary = activeSnappedBoundary,
+                                                        suppressedBoundaries = suppressedSnapBoundaries
+                                                    )
+                                                    activeSnappedBoundary = snapResult.activeSnappedBoundary
+                                                    suppressedSnapBoundaries = snapResult.suppressedBoundaries
+                                                    val offsetRatio = snapResult.offsetRatio
                                                     val candidateState = TextHandleState(lockedBoxIndex, offsetRatio)
 
                                                     // Role Swapping (Handle Crossing)

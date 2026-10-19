@@ -196,6 +196,109 @@ class TextSelectionMathTest {
     }
 
     @Test
+    fun evaluateBoundarySnap_continuousDrag_snapsThenUnsnapsWhenPulledOut_andNeverResnapsAtSameBoundary() {
+        var activeSnap: SnapBoundary? = null
+        var suppressed = emptySet<SnapBoundary>()
+
+        // 1. Drag into start snap zone (0.04 <= 0.06) -> snaps to 0.0f
+        val step1 = evaluateBoundarySnap(
+            boxIndex = 0,
+            rawOffsetRatio = 0.04f,
+            threshold = 0.06f,
+            activeSnappedBoundary = activeSnap,
+            suppressedBoundaries = suppressed
+        )
+        assertEquals(0.0f, step1.offsetRatio, 0.0001f)
+        assertEquals(SnapBoundary(0, SnapEndpoint.START), step1.activeSnappedBoundary)
+        assertEquals(emptySet<SnapBoundary>(), step1.suppressedBoundaries)
+        activeSnap = step1.activeSnappedBoundary
+        suppressed = step1.suppressedBoundaries
+
+        // 2. Micro-jitter inside snap zone (0.04 -> 0.05) -> remains snapped at 0.0f
+        val step2 = evaluateBoundarySnap(
+            boxIndex = 0,
+            rawOffsetRatio = 0.05f,
+            threshold = 0.06f,
+            activeSnappedBoundary = activeSnap,
+            suppressedBoundaries = suppressed
+        )
+        assertEquals(0.0f, step2.offsetRatio, 0.0001f)
+        assertEquals(SnapBoundary(0, SnapEndpoint.START), step2.activeSnappedBoundary)
+        assertEquals(emptySet<SnapBoundary>(), step2.suppressedBoundaries)
+        activeSnap = step2.activeSnappedBoundary
+        suppressed = step2.suppressedBoundaries
+
+        // 3. Pull back out of snap zone (0.08 > 0.06) -> cancels snap and suppresses (0, START)
+        val step3 = evaluateBoundarySnap(
+            boxIndex = 0,
+            rawOffsetRatio = 0.08f,
+            threshold = 0.06f,
+            activeSnappedBoundary = activeSnap,
+            suppressedBoundaries = suppressed
+        )
+        assertEquals(0.08f, step3.offsetRatio, 0.0001f)
+        assertEquals(null, step3.activeSnappedBoundary)
+        assertEquals(setOf(SnapBoundary(0, SnapEndpoint.START)), step3.suppressedBoundaries)
+        activeSnap = step3.activeSnappedBoundary
+        suppressed = step3.suppressedBoundaries
+
+        // 4. Move back into 0..0.06 zone (0.03) -> no longer snaps!
+        val step4 = evaluateBoundarySnap(
+            boxIndex = 0,
+            rawOffsetRatio = 0.03f,
+            threshold = 0.06f,
+            activeSnappedBoundary = activeSnap,
+            suppressedBoundaries = suppressed
+        )
+        assertEquals(0.03f, step4.offsetRatio, 0.0001f)
+        assertEquals(null, step4.activeSnappedBoundary)
+        assertEquals(setOf(SnapBoundary(0, SnapEndpoint.START)), step4.suppressedBoundaries)
+
+        // 5. Other boundaries (e.g. END of box 0, or START of box 1) still snap normally
+        val step5End = evaluateBoundarySnap(
+            boxIndex = 0,
+            rawOffsetRatio = 0.96f,
+            threshold = 0.06f,
+            activeSnappedBoundary = step4.activeSnappedBoundary,
+            suppressedBoundaries = step4.suppressedBoundaries
+        )
+        assertEquals(1.0f, step5End.offsetRatio, 0.0001f)
+        assertEquals(SnapBoundary(0, SnapEndpoint.END), step5End.activeSnappedBoundary)
+
+        val step5OtherBox = evaluateBoundarySnap(
+            boxIndex = 1,
+            rawOffsetRatio = 0.03f,
+            threshold = 0.06f,
+            activeSnappedBoundary = null,
+            suppressedBoundaries = step4.suppressedBoundaries
+        )
+        assertEquals(0.0f, step5OtherBox.offsetRatio, 0.0001f)
+        assertEquals(SnapBoundary(1, SnapEndpoint.START), step5OtherBox.activeSnappedBoundary)
+    }
+
+    @Test
+    fun evaluateBoundarySnap_regrabSnappedHandle_immediatelyUnsnapsWithinSnapZone() {
+        // Handle starts at 1.0f (either from previous snap or single-tap full-line selection)
+        val initialHandle = TextHandleState(index = 2, offsetRatio = 1.0f)
+        val initialBoundary = boundaryAtHandle(initialHandle)
+        assertEquals(SnapBoundary(2, SnapEndpoint.END), initialBoundary)
+
+        // User drags slightly inward to 0.97f (inside 0.94..1.0f zone) -> immediately unsnaps!
+        val step1 = evaluateBoundarySnap(
+            boxIndex = 2,
+            rawOffsetRatio = 0.97f,
+            threshold = 0.06f,
+            initialGrabbedBoundary = initialBoundary,
+            activeSnappedBoundary = null,
+            suppressedBoundaries = emptySet()
+        )
+        assertEquals(0.97f, step1.offsetRatio, 0.0001f)
+        assertEquals(null, step1.activeSnappedBoundary)
+        assertEquals(setOf(SnapBoundary(2, SnapEndpoint.END)), step1.suppressedBoundaries)
+    }
+
+
+    @Test
     fun planRecomposition_empty_returnsEmptyPlan() {
         val plan = planRecomposition(emptyList())
         assertEquals(RecompositionMode.EMPTY, plan.mode)

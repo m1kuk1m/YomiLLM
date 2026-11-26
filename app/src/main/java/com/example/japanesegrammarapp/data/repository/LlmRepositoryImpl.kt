@@ -134,84 +134,145 @@ class LlmRepositoryImpl @Inject constructor(
 
             }
             "Gemini", "Vertex AI" -> {
-                val cleanBase = effectiveUrl.trimEnd('/')
-                val url = "$cleanBase/models/$modelName:generateContent?key=${apiKey.trim()}"
-
-                val parts = mutableListOf<GeminiPart>()
-                parts.add(GeminiPart(text = userPrompt))
-                if (imageBase64 != null && mimeType != null) {
-                    parts.add(GeminiPart(inlineData = GeminiInlineData(mimeType = mimeType, data = imageBase64)))
-                }
-
-                val safetySettings = listOf(
-                    GeminiSafetySetting("HARM_CATEGORY_HARASSMENT", "BLOCK_NONE"),
-                    GeminiSafetySetting("HARM_CATEGORY_HATE_SPEECH", "BLOCK_NONE"),
-                    GeminiSafetySetting("HARM_CATEGORY_SEXUALLY_EXPLICIT", "BLOCK_NONE"),
-                    GeminiSafetySetting("HARM_CATEGORY_DANGEROUS_CONTENT", "BLOCK_NONE")
+                val parsed = callGeminiNonStreaming(
+                    systemPrompt = systemPrompt,
+                    userPrompt = userPrompt,
+                    imageBase64 = imageBase64,
+                    mimeType = mimeType,
+                    modelName = modelName,
+                    effectiveUrl = effectiveUrl,
+                    apiKey = apiKey,
+                    apiTypeLabel = apiTypeLabel
                 )
-
-                val reasoningLevel = settingsRepository.getEffectiveReasoningLevel(apiTypeLabel)
-                val thinkingConfig = buildGeminiThinkingConfig(modelName, reasoningLevel)
-
-                val request = GeminiRequest(
-                    contents = listOf(GeminiContent(role = "user", parts = parts)),
-                    systemInstruction = GeminiSystemInstruction(parts = listOf(GeminiPart(text = systemPrompt))),
-                    generationConfig = GeminiGenerationConfig(
-                        // Gemini 3.x / 4.x+ は temperature をデフォルトのままにすることが公式推奨
-                        // (低温設定は推論劣化・ループの原因になり、3.6+/4 では非推奨・将来エラー化)
-                        temperature = LlmConfig.resolveGeminiTemperature(modelName),
-                        thinkingConfig = thinkingConfig
-                    ),
-                    safetySettings = safetySettings
-                )
-                val response = try {
-                    llmService.generateGemini(url, request)
-                } catch (e: retrofit2.HttpException) {
-                    throw Exception(formatHttpError(e), e)
-                }
-                val candidateContent = response.candidates?.firstOrNull()?.content
-                val rawText = candidateContent?.parts
-                    ?.filter { it.thought != true }
-                    ?.mapNotNull { it.text }
-                    ?.joinToString("")
-                    ?.takeIf { it.isNotBlank() }
-                    ?: throw Exception(buildGeminiNoTextMessage(response))
-                val rawReasoningText = candidateContent?.parts
-                    ?.filter { it.thought == true }
-                    ?.mapNotNull { it.text }
-                    ?.joinToString("")
-                    ?.takeIf { it.isNotBlank() }
-
-                val thinkingRegex = Regex("<think>([\\s\\S]*?)(?:</think>|$)", RegexOption.DOT_MATCHES_ALL)
-                val text: String
-                val reasoningText: String?
-                if (rawReasoningText.isNullOrBlank() && thinkingRegex.containsMatchIn(rawText)) {
-                    reasoningText = thinkingRegex.find(rawText)?.groupValues?.getOrNull(1)?.trim()
-                    text = rawText.replace(thinkingRegex, "").trim()
-                } else {
-                    text = rawText
-                    reasoningText = rawReasoningText
-                }
-
-                val tokens = response.usageMetadata?.totalTokenCount ?: 0
-                var inputTokens = response.usageMetadata?.promptTokenCount ?: 0
-                var outputTokens = response.usageMetadata?.candidatesTokenCount ?: 0
-                val reasoningTokens = response.usageMetadata?.thoughtsTokenCount ?: 0
-                if (tokens > 0 && inputTokens == 0 && outputTokens == 0) {
-                    inputTokens = tokens * 6 / 10
-                    outputTokens = tokens - inputTokens
-                }
                 // 若模型进行了内部推理（thoughtsTokenCount > 0）但 API 未返回明文 thought text，
                 // 则插入占位提示（"隐式思考"场景，如 gemini-3.1-flash-lite）
-                val finalReasoningText = if (reasoningText.isNullOrBlank() && reasoningTokens > 0) {
-                    "[モデルは内部推論を行いました (${reasoningTokens} tokens 消費)。このモデルはAPIに思考テキストを返しません]"
+                val finalReasoningText = if (parsed.reasoningText.isNullOrBlank() && parsed.reasoningTokens > 0) {
+                    "[モデルは内部推論を行いました (${parsed.reasoningTokens} tokens 消費)。このモデルはAPIに思考テキストを返しません]"
                 } else {
-                    reasoningText
+                    parsed.reasoningText
                 }
-                LlmResult(text, tokens, inputTokens, outputTokens, provider, modelName, reasoningText = finalReasoningText, reasoningTokens = reasoningTokens)
+                LlmResult(
+                    text = parsed.text,
+                    consumedTokens = parsed.consumedTokens,
+                    inputTokens = parsed.inputTokens,
+                    outputTokens = parsed.outputTokens,
+                    provider = provider,
+                    modelName = modelName,
+                    reasoningText = finalReasoningText,
+                    reasoningTokens = parsed.reasoningTokens
+                )
             }
             else -> throw Exception("Unsupported provider")
         }
+    }
+
+    private data class GeminiNonStreamingResult(
+        val text: String,
+        val reasoningText: String?,
+        val consumedTokens: Int,
+        val inputTokens: Int,
+        val outputTokens: Int,
+        val reasoningTokens: Int
+    )
+
+    private fun shouldUseNonStreaming(baseProvider: String): Boolean {
+        if (settingsRepository.getStreamingEnabled()) return false
+        return baseProvider == "Gemini" || baseProvider == "Vertex AI"
+    }
+
+    private suspend fun callGeminiNonStreaming(
+        systemPrompt: String,
+        userPrompt: String,
+        imageBase64: String?,
+        mimeType: String?,
+        modelName: String,
+        effectiveUrl: String,
+        apiKey: String,
+        apiTypeLabel: String
+    ): GeminiNonStreamingResult {
+        val cleanBase = effectiveUrl.trimEnd('/')
+        val url = "$cleanBase/models/$modelName:generateContent?key=${apiKey.trim()}"
+
+        val parts = mutableListOf<GeminiPart>()
+        parts.add(GeminiPart(text = userPrompt))
+        if (imageBase64 != null && mimeType != null) {
+            parts.add(GeminiPart(inlineData = GeminiInlineData(mimeType = mimeType, data = imageBase64)))
+        }
+
+        val safetySettings = listOf(
+            GeminiSafetySetting("HARM_CATEGORY_HARASSMENT", "BLOCK_NONE"),
+            GeminiSafetySetting("HARM_CATEGORY_HATE_SPEECH", "BLOCK_NONE"),
+            GeminiSafetySetting("HARM_CATEGORY_SEXUALLY_EXPLICIT", "BLOCK_NONE"),
+            GeminiSafetySetting("HARM_CATEGORY_DANGEROUS_CONTENT", "BLOCK_NONE")
+        )
+
+        val reasoningLevel = settingsRepository.getEffectiveReasoningLevel(apiTypeLabel)
+        val thinkingConfig = buildGeminiThinkingConfig(modelName, reasoningLevel)
+
+        val request = GeminiRequest(
+            contents = listOf(GeminiContent(role = "user", parts = parts)),
+            systemInstruction = GeminiSystemInstruction(parts = listOf(GeminiPart(text = systemPrompt))),
+            generationConfig = GeminiGenerationConfig(
+                // Gemini 3.x / 4.x+ は temperature をデフォルトのままにすることが公式推奨
+                // (低温設定は推論劣化・ループの原因になり、3.6+/4 では非推奨・将来エラー化)
+                temperature = LlmConfig.resolveGeminiTemperature(modelName),
+                thinkingConfig = thinkingConfig
+            ),
+            safetySettings = safetySettings
+        )
+        val response = try {
+            llmService.generateGemini(url, request)
+        } catch (e: retrofit2.HttpException) {
+            throw Exception(formatHttpError(e), e)
+        }
+        if (!response.promptFeedback?.blockReason.isNullOrBlank()) {
+            throw Exception("Gemini API Blocked: Prompt flagged (blockReason=${response.promptFeedback?.blockReason})")
+        }
+        val candidate = response.candidates?.firstOrNull()
+        val finishReason = candidate?.finishReason
+        if (finishReason != null && finishReason != "STOP" && finishReason != "MAX_TOKENS") {
+            throw Exception(buildGeminiNoTextMessage(response))
+        }
+        val candidateContent = candidate?.content
+        val rawText = candidateContent?.parts
+            ?.filter { it.thought != true }
+            ?.mapNotNull { it.text }
+            ?.joinToString("")
+            ?.takeIf { it.isNotBlank() }
+            ?: throw Exception(buildGeminiNoTextMessage(response))
+        val rawReasoningText = candidateContent.parts
+            .filter { it.thought == true }
+            .mapNotNull { it.text }
+            .joinToString("")
+            .takeIf { it.isNotBlank() }
+
+        val thinkingRegex = Regex("<think>([\\s\\S]*?)(?:</think>|$)", RegexOption.DOT_MATCHES_ALL)
+        val text: String
+        val reasoningText: String?
+        if (rawReasoningText.isNullOrBlank() && thinkingRegex.containsMatchIn(rawText)) {
+            reasoningText = thinkingRegex.find(rawText)?.groupValues?.getOrNull(1)?.trim()
+            text = rawText.replace(thinkingRegex, "").trim()
+        } else {
+            text = rawText
+            reasoningText = rawReasoningText
+        }
+
+        val tokens = response.usageMetadata?.totalTokenCount ?: 0
+        var inputTokens = response.usageMetadata?.promptTokenCount ?: 0
+        var outputTokens = response.usageMetadata?.candidatesTokenCount ?: 0
+        val reasoningTokens = response.usageMetadata?.thoughtsTokenCount ?: 0
+        if (tokens > 0 && inputTokens == 0 && outputTokens == 0) {
+            inputTokens = tokens * 6 / 10
+            outputTokens = tokens - inputTokens
+        }
+        return GeminiNonStreamingResult(
+            text = text,
+            reasoningText = reasoningText,
+            consumedTokens = tokens,
+            inputTokens = inputTokens,
+            outputTokens = outputTokens,
+            reasoningTokens = reasoningTokens
+        )
     }
 
     private fun buildGeminiThinkingConfig(
@@ -765,6 +826,9 @@ class LlmRepositoryImpl @Inject constructor(
                 config.endpointId.ifBlank { "default" }
             }
             val role = if (isBackup) "Backup" else "Primary"
+            val useNonStreaming = shouldUseNonStreaming(config.baseProvider)
+            val transportTag = if (useNonStreaming) "non-stream" else "stream"
+            val reasoningLevelStr = settingsRepository.getEffectiveReasoningLevel(apiTypeLabel).name
 
             try {
                 com.example.japanesegrammarapp.utils.AppLogger.apiEvent(
@@ -775,7 +839,8 @@ class LlmRepositoryImpl @Inject constructor(
                     hasImage = imageBase64 != null,
                     userPrompt = userPrompt,
                     systemPrompt = systemPrompt,
-                    message = "$role request attempt $attemptNumber started via endpoint $endpointLabel",
+                    message = "$role [$transportTag] request attempt $attemptNumber started via endpoint $endpointLabel",
+                    reasoningLevel = reasoningLevelStr,
                     recordId = recordId,
                     stepName = stepName,
                     attempt = attemptNumber
@@ -783,6 +848,39 @@ class LlmRepositoryImpl @Inject constructor(
                 
                 if (config.endpointId.isNotBlank()) {
                     endpointHealthTracker.touch(config.endpointId)
+                }
+
+                if (useNonStreaming) {
+                    val result = callGeminiNonStreaming(
+                        systemPrompt = systemPrompt,
+                        userPrompt = userPrompt,
+                        imageBase64 = imageBase64,
+                        mimeType = mimeType,
+                        modelName = config.modelName,
+                        effectiveUrl = config.url,
+                        apiKey = config.key,
+                        apiTypeLabel = apiTypeLabel
+                    )
+                    if (!result.reasoningText.isNullOrBlank()) {
+                        emit(com.example.japanesegrammarapp.domain.model.LlmStreamEvent.ThoughtChunk(result.reasoningText))
+                    }
+                    emit(com.example.japanesegrammarapp.domain.model.LlmStreamEvent.Chunk(result.text))
+                    emit(
+                        com.example.japanesegrammarapp.domain.model.LlmStreamEvent.Metadata(
+                            provider = config.provider,
+                            modelName = config.modelName,
+                            usage = com.example.japanesegrammarapp.domain.repository.LlmResultMetadata(
+                                consumedTokens = result.consumedTokens,
+                                inputTokens = result.inputTokens,
+                                outputTokens = result.outputTokens,
+                                reasoningTokens = result.reasoningTokens
+                            )
+                        )
+                    )
+                    if (config.endpointId.isNotBlank()) {
+                        endpointHealthTracker.markSuccess(config.endpointId)
+                    }
+                    return@flow
                 }
 
                 val streamFlow = kotlinx.coroutines.flow.callbackFlow {

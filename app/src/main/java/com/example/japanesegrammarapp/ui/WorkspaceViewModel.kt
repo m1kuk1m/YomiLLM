@@ -416,6 +416,20 @@ class WorkspaceViewModel @Inject constructor(
                 }
             }
         }
+
+        viewModelScope.launch {
+            analyzeTextUseCase.regeneratingModulesFlow.collect { regenMap ->
+                _uiState.update { state ->
+                    val recordId = state.selectedRecord?.id
+                    val activeModules = if (recordId != null) regenMap[recordId].orEmpty() else emptySet()
+                    if (state.regeneratingModules == activeModules) {
+                        state
+                    } else {
+                        state.copy(regeneratingModules = activeModules)
+                    }
+                }
+            }
+        }
     }
 
     fun refreshSettings() {
@@ -473,7 +487,8 @@ class WorkspaceViewModel @Inject constructor(
             isExternalQuery = if (clearExternalQuery) false else it.isExternalQuery,
             selectedRecordProgress = if (record.status != AnalysisStatus.COMPLETED) {
                 analyzeTextUseCase.progressFlow.value[record.id]
-            } else null
+            } else null,
+            regeneratingModules = analyzeTextUseCase.regeneratingModulesFlow.value[record.id].orEmpty()
         ) }
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -667,6 +682,7 @@ class WorkspaceViewModel @Inject constructor(
             detailedResult = null,
             isParsingDetailedResult = false,
             selectedRecordProgress = null,
+            regeneratingModules = emptySet(),
             isExternalQuery = false
         ) }
     }
@@ -843,6 +859,25 @@ class WorkspaceViewModel @Inject constructor(
                         }
                     }
                 }
+            }
+        }
+    }
+
+    fun regenerateModule(module: RegeneratableModule) {
+        val record = _uiState.value.selectedRecord ?: return
+        if (record.id <= 0 || record.status != AnalysisStatus.COMPLETED) return
+        viewModelScope.launch {
+            try {
+                analyzeTextUseCase.regenerateModule(record.id, module)
+            } catch (e: IllegalArgumentException) {
+                val resId = when (e.message) {
+                    "Missing API Key." -> R.string.err_missing_api_key
+                    else -> R.string.error_retry_failed
+                }
+                _uiEvent.emit(UiEvent.ShowLocalizedError(resId))
+            } catch (e: Exception) {
+                AppLogger.e("WORKSPACE", "Failed to regenerate module $module for record ${record.id}", e)
+                _uiEvent.emit(UiEvent.ShowLocalizedError(R.string.error_retry_failed))
             }
         }
     }

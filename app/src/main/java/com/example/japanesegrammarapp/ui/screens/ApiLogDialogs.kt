@@ -59,10 +59,13 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -571,30 +574,28 @@ fun ApiLogDetailDialog(
                     }
                     Spacer(modifier = Modifier.height(16.dp))
                     
-                    SelectionContainer {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            ApiLogMetadataCard(log = log, sumiInk = sumiInk)
-                            ApiLogPromptSection(log = log, context = context, sumiInk = sumiInk)
-                            if (!log.reasoningContent.isNullOrBlank()) {
-                                ApiLogReasoningSection(
-                                    reasoningContent = log.reasoningContent,
-                                    context = context,
-                                    sumiInk = sumiInk
-                                )
-                            }
-                            if (!log.rawResponse.isNullOrBlank()) {
-                                ApiLogResponseSection(
-                                    formattedResponse = formattedResponse,
-                                    context = context,
-                                    sumiInk = sumiInk
-                                )
-                            }
-                            if (log.status == "ERROR" || log.status == "TIMEOUT" || log.status == "RETRY") {
-                                ApiLogErrorSection(log = log, context = context)
-                            }
+                    Column(
+                        modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        ApiLogMetadataCard(log = log, sumiInk = sumiInk)
+                        ApiLogPromptSection(log = log, context = context, sumiInk = sumiInk)
+                        if (!log.reasoningContent.isNullOrBlank()) {
+                            ApiLogReasoningSection(
+                                reasoningContent = log.reasoningContent,
+                                context = context,
+                                sumiInk = sumiInk
+                            )
+                        }
+                        if (!log.rawResponse.isNullOrBlank()) {
+                            ApiLogResponseSection(
+                                formattedResponse = formattedResponse,
+                                context = context,
+                                sumiInk = sumiInk
+                            )
+                        }
+                        if (log.status == "ERROR" || log.status == "TIMEOUT" || log.status == "RETRY") {
+                            ApiLogErrorSection(log = log, context = context)
                         }
                     }
                     Spacer(modifier = Modifier.height(16.dp))
@@ -620,30 +621,61 @@ private fun ApiLogMetadataCard(log: ApiDebugLog, sumiInk: Color) {
         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(stringResource(R.string.api_details_metadata), fontWeight = FontWeight.Bold, fontSize = 11.sp, color = sumiInk)
             Divider(color = sumiInk.copy(alpha = 0.05f))
-            Text(stringResource(R.string.api_log_time, log.time), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-            Text(stringResource(R.string.api_log_type, moduleDisplayName(log.apiTypeLabel)), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-            Text(stringResource(R.string.api_log_provider, log.provider), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-            Text(stringResource(R.string.api_log_model, log.model), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-            Text(stringResource(R.string.api_log_status, apiStatusLabel(log.status)), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = apiStatusColor(log.status))
-            if (!log.reasoningLevel.isNullOrBlank()) {
-                Text(stringResource(R.string.api_log_reasoning_level, log.reasoningLevel), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-            }
-            if (log.reasoningTokens != null && log.reasoningTokens > 0) {
-                Text(stringResource(R.string.api_log_tokens_reasoning, log.consumedTokens, log.inputTokens, log.outputTokens, log.reasoningTokens), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
+            val timeLine = stringResource(R.string.api_log_time, log.time)
+            val typeLine = stringResource(R.string.api_log_type, moduleDisplayName(log.apiTypeLabel))
+            val providerLine = stringResource(R.string.api_log_provider, log.provider)
+            val modelLine = stringResource(R.string.api_log_model, log.model)
+            val statusLine = stringResource(R.string.api_log_status, apiStatusLabel(log.status))
+            val statusColor = apiStatusColor(log.status)
+            val reasoningLevelLine = if (!log.reasoningLevel.isNullOrBlank()) {
+                stringResource(R.string.api_log_reasoning_level, log.reasoningLevel)
             } else {
-                Text(stringResource(R.string.api_log_tokens, log.consumedTokens, log.inputTokens, log.outputTokens), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
+                null
             }
-            Text(stringResource(R.string.api_log_has_image, log.hasImage), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-            if (log.recordId != null || !log.stepName.isNullOrBlank() || log.attempt != null || log.elapsedMs != null) {
-                val unknown = stringResource(R.string.api_log_unknown_value)
-                val stepDisplay = log.stepName?.let { apiStepLabel(it) } ?: unknown
-                Text(stringResource(R.string.api_log_record, log.recordId?.toString() ?: unknown), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-                Text(stringResource(R.string.api_log_step, stepDisplay), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-                Text(stringResource(R.string.api_log_attempt, log.attempt?.toString() ?: unknown), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
-                Text(stringResource(R.string.api_log_elapsed, log.elapsedMs?.toString() ?: unknown), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
+            val tokensLine = if (log.reasoningTokens != null && log.reasoningTokens > 0) {
+                stringResource(R.string.api_log_tokens_reasoning, log.consumedTokens, log.inputTokens, log.outputTokens, log.reasoningTokens)
+            } else {
+                stringResource(R.string.api_log_tokens, log.consumedTokens, log.inputTokens, log.outputTokens)
             }
-            if (!log.errorMessage.isNullOrBlank() && log.status != "ERROR") {
-                Text(stringResource(R.string.api_log_message, log.errorMessage), fontSize = 10.sp, color = sumiInk.copy(alpha = 0.8f))
+            val hasImageLine = stringResource(R.string.api_log_has_image, log.hasImage)
+            val hasRecordDetails = log.recordId != null || !log.stepName.isNullOrBlank() || log.attempt != null || log.elapsedMs != null
+            val unknown = stringResource(R.string.api_log_unknown_value)
+            val stepDisplay = log.stepName?.let { apiStepLabel(it) } ?: unknown
+            val recordLine = if (hasRecordDetails) stringResource(R.string.api_log_record, log.recordId?.toString() ?: unknown) else null
+            val stepLine = if (hasRecordDetails) stringResource(R.string.api_log_step, stepDisplay) else null
+            val attemptLine = if (hasRecordDetails) stringResource(R.string.api_log_attempt, log.attempt?.toString() ?: unknown) else null
+            val elapsedLine = if (hasRecordDetails) stringResource(R.string.api_log_elapsed, log.elapsedMs?.toString() ?: unknown) else null
+            val messageLine = if (!log.errorMessage.isNullOrBlank() && log.status != "ERROR") {
+                stringResource(R.string.api_log_message, log.errorMessage)
+            } else {
+                null
+            }
+
+            val metadataText = buildAnnotatedString {
+                appendLine(timeLine)
+                appendLine(typeLine)
+                appendLine(providerLine)
+                appendLine(modelLine)
+                withStyle(SpanStyle(color = statusColor, fontWeight = FontWeight.Bold)) {
+                    append(statusLine)
+                }
+                reasoningLevelLine?.let { append("\n"); append(it) }
+                append("\n"); append(tokensLine)
+                append("\n"); append(hasImageLine)
+                recordLine?.let { append("\n"); append(it) }
+                stepLine?.let { append("\n"); append(it) }
+                attemptLine?.let { append("\n"); append(it) }
+                elapsedLine?.let { append("\n"); append(it) }
+                messageLine?.let { append("\n"); append(it) }
+            }
+
+            SelectionContainer {
+                Text(
+                    text = metadataText,
+                    fontSize = 10.sp,
+                    lineHeight = 16.sp,
+                    color = sumiInk.copy(alpha = 0.8f)
+                )
             }
         }
     }
@@ -794,7 +826,11 @@ private fun ApiLogCodeBlock(text: String, color: Color, background: Color) {
             .background(background, RoundedCornerShape(4.dp))
             .padding(6.dp)
     ) {
-        Text(text, fontSize = 9.sp, fontFamily = FontFamily.Monospace, color = color.copy(alpha = 0.8f))
+        if (text.isNotEmpty()) {
+            SelectionContainer {
+                Text(text, fontSize = 9.sp, fontFamily = FontFamily.Monospace, color = color.copy(alpha = 0.8f))
+            }
+        }
     }
 }
 

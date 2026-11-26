@@ -40,6 +40,7 @@ class SettingsRepositoryImpl @Inject constructor(
     @Volatile private var cachedUseBackupApi: Boolean? = null
     @Volatile private var cachedAutoRetryOnError: Boolean? = null
     @Volatile private var cachedFailoverToNextEndpoint: Boolean? = null
+    @Volatile private var cachedStreamingEnabled: Boolean? = null
     @Volatile private var cachedDecisionApiEnabled: Boolean? = null
     @Volatile private var cachedDecisionModel: String? = null
     @Volatile private var cachedOcrBoxDetectionSettings: OcrBoxDetectionSettings? = null
@@ -1152,6 +1153,24 @@ class SettingsRepositoryImpl @Inject constructor(
     override fun setFailoverToNextEndpoint(value: Boolean) {
         cachedFailoverToNextEndpoint = value
         settingPrefs.edit().putBoolean("failover_to_next_endpoint", value).apply()
+    }
+
+    override fun getStreamingEnabled(): Boolean {
+        return cachedStreamingEnabled ?: synchronized(this) {
+            val cached = cachedStreamingEnabled
+            if (cached != null) {
+                cached
+            } else {
+                val value = settingPrefs.getBoolean("llm_streaming_enabled", true)
+                cachedStreamingEnabled = value
+                value
+            }
+        }
+    }
+
+    override fun setStreamingEnabled(value: Boolean) {
+        cachedStreamingEnabled = value
+        settingPrefs.edit().putBoolean("llm_streaming_enabled", value).apply()
     }
 
     override fun getDecisionApiEnabled(): Boolean {

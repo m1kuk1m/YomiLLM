@@ -40,10 +40,12 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import com.example.japanesegrammarapp.R
 import com.example.japanesegrammarapp.domain.model.AnalysisDomainRecord
 import com.example.japanesegrammarapp.domain.model.AnalysisStatus
+import com.example.japanesegrammarapp.domain.model.AnalysisStep
 import com.example.japanesegrammarapp.domain.model.derivePosCategory
 import com.example.japanesegrammarapp.ui.WorkspaceViewModel
 import com.example.japanesegrammarapp.ui.UiEvent
 import com.example.japanesegrammarapp.ui.screens.components.FloatingActionBall
+import com.example.japanesegrammarapp.ui.screens.components.RegenerateAnalysisBottomSheet
 import com.example.japanesegrammarapp.ui.screens.components.WorkspaceInputForm
 import com.example.japanesegrammarapp.ui.screens.components.WorkspaceResultContent
 import com.example.japanesegrammarapp.ui.theme.ZenColors.SumiInk
@@ -139,10 +141,14 @@ fun WorkspaceScreen(
     }
     var selectedImageUriState by remember { mutableStateOf<Uri?>(null) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var showRegenerateSheet by remember { mutableStateOf(false) }
     var editingSegment by remember { mutableStateOf<com.example.japanesegrammarapp.domain.model.WordSegment?>(null) }
 
 
     // Clear image uri when returning to homepage (no active record)
+    LaunchedEffect(uiState.selectedRecord?.id) {
+        showRegenerateSheet = false
+    }
     LaunchedEffect(uiState.selectedRecord) {
         if (uiState.selectedRecord == null) {
             selectedImageUriState = null
@@ -343,16 +349,36 @@ fun WorkspaceScreen(
                         }
                     },
                     actions = {
-                        if (uiState.selectedRecord != null) {
-                                IconButton(onClick = {
-                                    uiState.selectedRecord?.let { viewModel.retryAnalysis(it.id) }
-                                }) {
-                                    Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.retry), tint = MaterialTheme.colorScheme.onSurface)
+                        val selectedRecord = uiState.selectedRecord
+                        if (selectedRecord != null) {
+                            val canOpenRegenerateSheet =
+                                selectedRecord.status == AnalysisStatus.COMPLETED &&
+                                    selectedRecord.originalText.isNotBlank()
+                            IconButton(onClick = {
+                                if (canOpenRegenerateSheet) {
+                                    showRegenerateSheet = true
+                                } else {
+                                    viewModel.retryAnalysis(selectedRecord.id)
                                 }
-                                IconButton(onClick = { viewModel.clearSelectedRecord() }) {
-                                    Icon(Icons.Default.Add, contentDescription = stringResource(R.string.new_analysis), tint = MaterialTheme.colorScheme.onSurface)
+                            }) {
+                                if (uiState.regeneratingModules.isNotEmpty()) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = stringResource(R.string.regenerate_sheet_title),
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
                                 }
                             }
+                            IconButton(onClick = { viewModel.clearSelectedRecord() }) {
+                                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.new_analysis), tint = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
                             IconButton(onClick = {
                                 if (fromBookmarks) {
                                     navController.popBackStack("bookmarks", false)
@@ -759,8 +785,11 @@ fun WorkspaceScreen(
                                                     onEditWordSegment = { segment ->
                                                         editingSegment = segment
                                                     },
-                                                onToggleGrammarBookmark = { pattern, explanation, sourceText ->
+                                                    onToggleGrammarBookmark = { pattern, explanation, sourceText ->
                                                         viewModel.toggleGrammarPointBookmark(pattern, explanation, sourceText)
+                                                    },
+                                                    onRegenerateModule = { module ->
+                                                        viewModel.regenerateModule(module)
                                                     },
                                                     onLoadNewer = { viewModel.loadNewerRecord() },
                                                     onLoadOlder = { viewModel.loadOlderRecord() },
@@ -858,6 +887,29 @@ fun WorkspaceScreen(
                 }
             }
         }
+
+    if (showRegenerateSheet) {
+        val record = uiState.selectedRecord
+        if (record != null && record.status == AnalysisStatus.COMPLETED && record.originalText.isNotBlank()) {
+            val mergedModuleErrors = buildMap {
+                uiState.detailedResult?.moduleErrors?.let { putAll(it) }
+                uiState.selectedRecordProgress?.stepErrors?.let { putAll(it) }
+            }
+            val canRegenerateSegmentsOnly =
+                !uiState.detailedResult?.segments.isNullOrEmpty() &&
+                    !mergedModuleErrors.containsKey(AnalysisStep.TOKENIZATION.name)
+            RegenerateAnalysisBottomSheet(
+                regeneratingModules = uiState.regeneratingModules,
+                canRegenerateSegmentsOnly = canRegenerateSegmentsOnly,
+                moduleErrors = mergedModuleErrors,
+                onRetryAll = { viewModel.retryAnalysis(record.id) },
+                onRegenerateModule = { module -> viewModel.regenerateModule(module) },
+                onDismiss = { showRegenerateSheet = false }
+            )
+        } else {
+            showRegenerateSheet = false
+        }
+    }
 
     if (showDeleteConfirmDialog) {
         val record = uiState.selectedRecord

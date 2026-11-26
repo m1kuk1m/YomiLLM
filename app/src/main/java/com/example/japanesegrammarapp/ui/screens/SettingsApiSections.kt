@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.ChevronRight
@@ -76,7 +77,8 @@ fun SettingsApiModelSection(
     onActiveProviderChange: (String) -> Unit,
     onActiveModelChange: (String) -> Unit,
     onOpenCotDialog: () -> Unit,
-    onOpenComponentModelDialog: () -> Unit
+    onOpenComponentModelDialog: () -> Unit,
+    onStreamingEnabledChange: (Boolean) -> Unit
 ) {
     val sumiInk = MaterialTheme.colorScheme.onBackground
     val activeProvider = uiState.activeProvider
@@ -227,6 +229,22 @@ fun SettingsApiModelSection(
                     Icons.Default.ChevronRight,
                     contentDescription = null,
                     tint = sumiInk.copy(alpha = 0.5f)
+                )
+            }
+        )
+
+        SettingsDivider()
+
+        SettingsItem(
+            icon = Icons.Default.Bolt,
+            title = stringResource(R.string.streaming_enabled),
+            subtitle = stringResource(R.string.streaming_enabled_desc),
+            onClick = { onStreamingEnabledChange(!uiState.streamingEnabled) },
+            trailingContent = {
+                Switch(
+                    checked = uiState.streamingEnabled,
+                    onCheckedChange = onStreamingEnabledChange,
+                    colors = SettingsSwitchColors()
                 )
             }
         )

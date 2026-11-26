@@ -229,7 +229,20 @@ data class DetailedAnalysisResult(
     val segments: List<WordSegment>? = null,
     val clauses: List<SentenceClause>? = null,
     val grammarPoints: List<DetailedGrammarPoint>? = null,
+    val moduleErrors: Map<String, String>? = null,
     var consumedTokens: Int = 0,
     var inputTokens: Int = 0,
     var outputTokens: Int = 0
-)
+) {
+    fun withModuleError(stepName: String, errorMessage: String): DetailedAnalysisResult {
+        val next = (moduleErrors ?: emptyMap()) + (stepName to errorMessage)
+        return copy(moduleErrors = next)
+    }
+
+    fun withoutModuleErrors(vararg stepNames: String): DetailedAnalysisResult {
+        val current = moduleErrors
+        if (current.isNullOrEmpty()) return this
+        val next = current - stepNames.toSet()
+        return copy(moduleErrors = next.takeIf { it.isNotEmpty() })
+    }
+}

@@ -8,7 +8,10 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,6 +32,7 @@ data class AnalysisProgress(
 
 interface AnalysisTaskManager {
     val progressFlow: StateFlow<Map<Int, AnalysisProgress>>
+    val regeneratingModulesFlow: StateFlow<Map<Int, Set<RegeneratableModule>>>
 
     suspend fun execute(
         text: String,
@@ -40,6 +44,7 @@ interface AnalysisTaskManager {
     ): Int
 
     suspend fun executeRetry(recordId: Int, text: String, imageUri: String?)
+    suspend fun regenerateModule(recordId: Int, module: RegeneratableModule)
     fun cancel(recordId: Int)
     fun parseDetailedResult(originalText: String, jsonString: String?): DetailedAnalysisResult?
 }
@@ -59,8 +64,12 @@ class DefaultAnalysisTaskManager @Inject constructor(
     @ApplicationScope private val repositoryScope: CoroutineScope
 ) : AnalysisTaskManager {
     private val activeJobs = ConcurrentHashMap<Int, Job>()
+    private val activeModuleJobs = ConcurrentHashMap<Pair<Int, String>, Job>()
+    private val recordMutexes = ConcurrentHashMap<Int, Mutex>()
     private val progressStore = AnalysisProgressStore()
     override val progressFlow: StateFlow<Map<Int, AnalysisProgress>> = progressStore.progressFlow
+    private val _regeneratingModulesFlow = MutableStateFlow<Map<Int, Set<RegeneratableModule>>>(emptyMap())
+    override val regeneratingModulesFlow: StateFlow<Map<Int, Set<RegeneratableModule>>> = _regeneratingModulesFlow.asStateFlow()
 
     override suspend fun execute(
         text: String,
@@ -127,6 +136,7 @@ class DefaultAnalysisTaskManager @Inject constructor(
     }
 
     override suspend fun executeRetry(recordId: Int, text: String, imageUri: String?) {
+        cancelModuleRegenerations(recordId)
         val cleanText = if (settingsRepository.getRemoveAccidentalSpaces()) {
             TextCleaner.removeAccidentalSpaces(text)
         } else {
@@ -139,6 +149,7 @@ class DefaultAnalysisTaskManager @Inject constructor(
 
 
     override fun cancel(recordId: Int) {
+        cancelModuleRegenerations(recordId)
         val job = activeJobs.remove(recordId)
         job?.cancel()
         repositoryScope.launch {
@@ -147,6 +158,157 @@ class DefaultAnalysisTaskManager @Inject constructor(
                 saveAnalysisRecordUseCase.delete(record)
             }
         }
+    }
+
+    private fun cancelModuleRegenerations(recordId: Int) {
+        val keysToRemove = activeModuleJobs.keys.filter { it.first == recordId }
+        keysToRemove.forEach { key ->
+            activeModuleJobs.remove(key)?.cancel()
+        }
+        _regeneratingModulesFlow.update { it - recordId }
+    }
+
+    private fun markModuleRegenerating(recordId: Int, module: RegeneratableModule) {
+        _regeneratingModulesFlow.update { map ->
+            val current = map[recordId].orEmpty()
+            map + (recordId to (current + module))
+        }
+    }
+
+    private fun unmarkModuleRegenerating(recordId: Int, module: RegeneratableModule) {
+        _regeneratingModulesFlow.update { map ->
+            val next = map[recordId].orEmpty() - module
+            if (next.isEmpty()) map - recordId else map + (recordId to next)
+        }
+    }
+
+    override suspend fun regenerateModule(recordId: Int, module: RegeneratableModule) {
+        if (recordId <= 0) return
+        if (activeJobs.containsKey(recordId)) return
+        val jobKey = recordId to module.conflictGroup
+        if (activeModuleJobs.containsKey(jobKey)) return
+
+        val record = saveAnalysisRecordUseCase.getById(recordId) ?: return
+        if (record.status != AnalysisStatus.COMPLETED) return
+        val analysisText = record.originalText.trim()
+        if (analysisText.isBlank()) return
+
+        val primaryProvider = settingsRepository.getActiveProvider()
+        val primaryModel = settingsRepository.getActiveModel(primaryProvider)
+        val fallbackPrimaryConfigs = endpointPoolResolver.resolveConfigs(primaryProvider, primaryModel)
+
+        val resolveForModule: (AnalysisModule) -> List<LlmApiConfig> = { target ->
+            endpointPoolResolver.resolveModuleConfigs(
+                module = target,
+                fallbackProvider = primaryProvider,
+                fallbackModel = primaryModel,
+                onOverrideUnavailable = { overrideProvider, overrideModel ->
+                    appLogWriter.error(
+                        "LLM_API",
+                        "Module model override for [${target.id}] ($overrideProvider: $overrideModel) has no usable endpoint; falling back to global model"
+                    )
+                }
+            )
+        }
+
+        val requiredConfigs = when (module) {
+            RegeneratableModule.TRANSLATION -> resolveForModule(AnalysisModule.TRANSLATION)
+            RegeneratableModule.CLAUSES -> resolveForModule(AnalysisModule.CLAUSES)
+            RegeneratableModule.GRAMMAR -> resolveForModule(AnalysisModule.GRAMMAR)
+            RegeneratableModule.SEGMENTS_ONLY -> resolveForModule(AnalysisModule.SEGMENTS)
+            RegeneratableModule.TOKENIZATION_AND_SEGMENTS -> resolveForModule(AnalysisModule.TOKENIZER_TEXT)
+        }
+        if (requiredConfigs.isEmpty() && fallbackPrimaryConfigs.isEmpty()) {
+            throw IllegalArgumentException("Missing API Key.")
+        }
+
+        val backupConfigs = endpointPoolResolver.resolveBackupConfigs()
+        val decisionConfigs = if (settingsRepository.getDecisionApiEnabled()) {
+            val model = settingsRepository.getDecisionModel()
+            endpointPoolResolver.resolveConfigs(DecisionConfig.PROVIDER_ID, model)
+        } else {
+            emptyList()
+        }
+
+        val job = repositoryScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            try {
+                val getRetryListener = { step: AnalysisStep ->
+                    { attempt: Int ->
+                        repositoryScope.launch {
+                            eventBus.post(AnalysisEvent.LlmRetryTriggered(recordId, step, attempt))
+                        }
+                        Unit
+                    }
+                }
+                val getBackupListener = { step: AnalysisStep ->
+                    { backupProv: String ->
+                        repositoryScope.launch {
+                            eventBus.post(AnalysisEvent.LlmBackupTriggered(recordId, step, backupProv))
+                        }
+                        Unit
+                    }
+                }
+
+                when (module) {
+                    RegeneratableModule.TRANSLATION -> runRegenerateTranslation(
+                        recordId = recordId,
+                        analysisText = analysisText,
+                        primaryConfigs = resolveForModule(AnalysisModule.TRANSLATION),
+                        backupConfigs = backupConfigs,
+                        getRetryListener = getRetryListener,
+                        getBackupListener = getBackupListener
+                    )
+                    RegeneratableModule.CLAUSES -> runRegenerateClauses(
+                        recordId = recordId,
+                        analysisText = analysisText,
+                        primaryConfigs = resolveForModule(AnalysisModule.CLAUSES),
+                        backupConfigs = backupConfigs,
+                        getRetryListener = getRetryListener,
+                        getBackupListener = getBackupListener
+                    )
+                    RegeneratableModule.GRAMMAR -> runRegenerateGrammar(
+                        recordId = recordId,
+                        analysisText = analysisText,
+                        primaryConfigs = resolveForModule(AnalysisModule.GRAMMAR),
+                        backupConfigs = backupConfigs,
+                        getRetryListener = getRetryListener,
+                        getBackupListener = getBackupListener
+                    )
+                    RegeneratableModule.SEGMENTS_ONLY -> runRegenerateVocabulary(
+                        recordId = recordId,
+                        analysisText = analysisText,
+                        retokenize = false,
+                        tokenizerConfigs = resolveForModule(AnalysisModule.TOKENIZER_TEXT),
+                        segmentsConfigs = resolveForModule(AnalysisModule.SEGMENTS),
+                        backupConfigs = backupConfigs,
+                        decisionConfigs = decisionConfigs,
+                        getRetryListener = getRetryListener,
+                        getBackupListener = getBackupListener
+                    )
+                    RegeneratableModule.TOKENIZATION_AND_SEGMENTS -> runRegenerateVocabulary(
+                        recordId = recordId,
+                        analysisText = analysisText,
+                        retokenize = true,
+                        tokenizerConfigs = resolveForModule(AnalysisModule.TOKENIZER_TEXT),
+                        segmentsConfigs = resolveForModule(AnalysisModule.SEGMENTS),
+                        backupConfigs = backupConfigs,
+                        decisionConfigs = decisionConfigs,
+                        getRetryListener = getRetryListener,
+                        getBackupListener = getBackupListener
+                    )
+                }
+            } finally {
+                activeModuleJobs.remove(jobKey)
+                unmarkModuleRegenerating(recordId, module)
+            }
+        }
+
+        if (activeModuleJobs.putIfAbsent(jobKey, job) != null) {
+            job.cancel()
+            return
+        }
+        markModuleRegenerating(recordId, module)
+        job.start()
     }
 
     private fun launchBackgroundAnalysis(
@@ -283,8 +445,10 @@ class DefaultAnalysisTaskManager @Inject constructor(
                             }
                         }
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        val errorMsg = e.localizedMessage ?: "Tokenizer failed"
                         logStepFailure(recordId, AnalysisStep.TOKENIZATION, e)
-                        progressStore.markStepError(recordId, AnalysisStep.TOKENIZATION.name, e.localizedMessage ?: "Tokenizer failed")
+                        progressStore.markStepError(recordId, AnalysisStep.TOKENIZATION.name, errorMsg)
                         
                         val fallbackToken = if (ocrText.isNotBlank()) ocrText else "読み取り失敗"
                         tokens = listOf(fallbackToken)
@@ -294,6 +458,7 @@ class DefaultAnalysisTaskManager @Inject constructor(
                         progressStore.updatePartialSegments(recordId, skeletonSegments)
                         partialResultStore.update { current ->
                             current.copy(segments = skeletonSegments)
+                                .withModuleError(AnalysisStep.TOKENIZATION.name, errorMsg)
                         }
                     }
 
@@ -353,8 +518,11 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                 }
                                 }
                             } catch (e: Exception) {
+                                if (e is CancellationException) throw e
+                                val errorMsg = e.localizedMessage ?: "Unknown error"
                                 logStepFailure(recordId, AnalysisStep.TRANSLATION, e)
-                                progressStore.markStepError(recordId, AnalysisStep.TRANSLATION.name, e.localizedMessage ?: "Unknown error")
+                                progressStore.markStepError(recordId, AnalysisStep.TRANSLATION.name, errorMsg)
+                                partialResultStore.update { it.withModuleError(AnalysisStep.TRANSLATION.name, errorMsg) }
                             } finally {
                                 progressStore.markTranslationCompleted(recordId)
                             }
@@ -386,8 +554,11 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                 }
                                 }
                             } catch (e: Exception) {
+                                if (e is CancellationException) throw e
+                                val errorMsg = e.localizedMessage ?: "Unknown error"
                                 logStepFailure(recordId, AnalysisStep.CLAUSE_ANALYSIS, e)
-                                progressStore.markStepError(recordId, AnalysisStep.CLAUSE_ANALYSIS.name, e.localizedMessage ?: "Unknown error")
+                                progressStore.markStepError(recordId, AnalysisStep.CLAUSE_ANALYSIS.name, errorMsg)
+                                partialResultStore.update { it.withModuleError(AnalysisStep.CLAUSE_ANALYSIS.name, errorMsg) }
                             } finally {
                                 progressStore.markClausesCompleted(recordId)
                             }
@@ -419,8 +590,11 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                 }
                                 }
                             } catch (e: Exception) {
+                                if (e is CancellationException) throw e
+                                val errorMsg = e.localizedMessage ?: "Unknown error"
                                 logStepFailure(recordId, AnalysisStep.GRAMMAR_EXPLANATION, e)
-                                progressStore.markStepError(recordId, AnalysisStep.GRAMMAR_EXPLANATION.name, e.localizedMessage ?: "Unknown error")
+                                progressStore.markStepError(recordId, AnalysisStep.GRAMMAR_EXPLANATION.name, errorMsg)
+                                partialResultStore.update { it.withModuleError(AnalysisStep.GRAMMAR_EXPLANATION.name, errorMsg) }
                             } finally {
                                 progressStore.markGrammarCompleted(recordId)
                             }
@@ -565,8 +739,11 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                     }
                                     }
                                 } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    val errorMsg = e.localizedMessage ?: "Unknown error"
                                     logStepFailure(recordId, AnalysisStep.TRANSLATION, e)
-                                    progressStore.markStepError(recordId, AnalysisStep.TRANSLATION.name, e.localizedMessage ?: "Unknown error")
+                                    progressStore.markStepError(recordId, AnalysisStep.TRANSLATION.name, errorMsg)
+                                    partialResultStore.update { it.withModuleError(AnalysisStep.TRANSLATION.name, errorMsg) }
                                 } finally {
                                     progressStore.markTranslationCompleted(recordId)
                                 }
@@ -598,8 +775,11 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                     }
                                     }
                                 } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    val errorMsg = e.localizedMessage ?: "Unknown error"
                                     logStepFailure(recordId, AnalysisStep.CLAUSE_ANALYSIS, e)
-                                    progressStore.markStepError(recordId, AnalysisStep.CLAUSE_ANALYSIS.name, e.localizedMessage ?: "Unknown error")
+                                    progressStore.markStepError(recordId, AnalysisStep.CLAUSE_ANALYSIS.name, errorMsg)
+                                    partialResultStore.update { it.withModuleError(AnalysisStep.CLAUSE_ANALYSIS.name, errorMsg) }
                                 } finally {
                                     progressStore.markClausesCompleted(recordId)
                                 }
@@ -631,8 +811,11 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                     }
                                     }
                                 } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    val errorMsg = e.localizedMessage ?: "Unknown error"
                                     logStepFailure(recordId, AnalysisStep.GRAMMAR_EXPLANATION, e)
-                                    progressStore.markStepError(recordId, AnalysisStep.GRAMMAR_EXPLANATION.name, e.localizedMessage ?: "Unknown error")
+                                    progressStore.markStepError(recordId, AnalysisStep.GRAMMAR_EXPLANATION.name, errorMsg)
+                                    partialResultStore.update { it.withModuleError(AnalysisStep.GRAMMAR_EXPLANATION.name, errorMsg) }
                                 } finally {
                                     progressStore.markGrammarCompleted(recordId)
                                 }
@@ -675,14 +858,17 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                         }
                                     }
                                 } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    val errorMsg = e.localizedMessage ?: "Tokenizer failed"
                                     logStepFailure(recordId, AnalysisStep.TOKENIZATION, e)
-                                    progressStore.markStepError(recordId, AnalysisStep.TOKENIZATION.name, e.localizedMessage ?: "Tokenizer failed")
+                                    progressStore.markStepError(recordId, AnalysisStep.TOKENIZATION.name, errorMsg)
                                     val fallbackToken = if (analysisText.isNotBlank()) analysisText else "読み取り失敗"
                                     tokens = listOf(fallbackToken)
                                     val skeletonSegments = tokens.map { WordSegment(text = it) }
                                     progressStore.updatePartialSegments(recordId, skeletonSegments)
                                     partialResultStore.update { current ->
                                         current.copy(segments = skeletonSegments)
+                                            .withModuleError(AnalysisStep.TOKENIZATION.name, errorMsg)
                                     }
                                 } finally {
                                     progressStore.markTokenizerCompleted(recordId)
@@ -800,12 +986,14 @@ class DefaultAnalysisTaskManager @Inject constructor(
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
+                    val errorMsg = e.localizedMessage ?: "Decision POS classification failed"
                     logStepFailure(recordId, AnalysisStep.DECISION_POS, e)
                     progressStore.markStepError(
                         recordId,
                         AnalysisStep.DECISION_POS.name,
-                        e.localizedMessage ?: "Decision POS classification failed"
+                        errorMsg
                     )
+                    partialResultStore.update { it.withModuleError(AnalysisStep.DECISION_POS.name, errorMsg) }
                 } finally {
                     progressStore.markDecisionPosCompleted(recordId)
                 }
@@ -847,14 +1035,393 @@ class DefaultAnalysisTaskManager @Inject constructor(
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                val errorMsg = e.localizedMessage ?: "Unknown error"
                 logStepFailure(recordId, AnalysisStep.DETAILED_GRAMMAR, e)
                 progressStore.markStepError(
                     recordId,
                     AnalysisStep.DETAILED_GRAMMAR.name,
-                    e.localizedMessage ?: "Unknown error"
+                    errorMsg
                 )
+                partialResultStore.update { it.withModuleError(AnalysisStep.DETAILED_GRAMMAR.name, errorMsg) }
             } finally {
                 progressStore.markSegmentsCompleted(recordId)
+            }
+        }
+    }
+
+    private class TokenDeltaTracker {
+        private var lastConsumed = 0
+        private var lastInput = 0
+        private var lastOutput = 0
+
+        fun consumeDelta(meta: LlmResultMetadata): LlmResultMetadata {
+            val deltaConsumed = (meta.consumedTokens - lastConsumed).coerceAtLeast(0)
+            val deltaInput = (meta.inputTokens - lastInput).coerceAtLeast(0)
+            val deltaOutput = (meta.outputTokens - lastOutput).coerceAtLeast(0)
+            if (meta.consumedTokens > lastConsumed) lastConsumed = meta.consumedTokens
+            if (meta.inputTokens > lastInput) lastInput = meta.inputTokens
+            if (meta.outputTokens > lastOutput) lastOutput = meta.outputTokens
+            return LlmResultMetadata(deltaConsumed, deltaInput, deltaOutput, meta.reasoningTokens)
+        }
+    }
+
+    private fun DetailedAnalysisResult.addTokenDelta(delta: LlmResultMetadata): DetailedAnalysisResult {
+        if (delta.consumedTokens == 0 && delta.inputTokens == 0 && delta.outputTokens == 0) {
+            return this
+        }
+        return copy(
+            consumedTokens = consumedTokens + delta.consumedTokens,
+            inputTokens = inputTokens + delta.inputTokens,
+            outputTokens = outputTokens + delta.outputTokens
+        )
+    }
+
+    private suspend fun patchRecordResult(
+        recordId: Int,
+        transform: (DetailedAnalysisResult) -> DetailedAnalysisResult
+    ) {
+        val mutex = recordMutexes.computeIfAbsent(recordId) { Mutex() }
+        mutex.withLock {
+            val currentRecord = saveAnalysisRecordUseCase.getById(recordId) ?: return@withLock
+            val existing = detailedResultSerializer.fromJson(currentRecord.analysisResult)
+                ?: DetailedAnalysisResult(
+                    consumedTokens = currentRecord.consumedTokens,
+                    inputTokens = currentRecord.inputTokens,
+                    outputTokens = currentRecord.outputTokens
+                )
+            val synced = existing.copy(
+                consumedTokens = maxOf(existing.consumedTokens, currentRecord.consumedTokens),
+                inputTokens = maxOf(existing.inputTokens, currentRecord.inputTokens),
+                outputTokens = maxOf(existing.outputTokens, currentRecord.outputTokens)
+            )
+            val updatedDetail = transform(synced)
+            val updatedJson = detailedResultSerializer.toJson(updatedDetail)
+            saveAnalysisRecordUseCase.update(
+                currentRecord.copy(
+                    analysisResult = updatedJson,
+                    consumedTokens = updatedDetail.consumedTokens,
+                    inputTokens = updatedDetail.inputTokens,
+                    outputTokens = updatedDetail.outputTokens
+                )
+            )
+        }
+    }
+
+    private suspend fun runRegenerateTranslation(
+        recordId: Int,
+        analysisText: String,
+        primaryConfigs: List<LlmApiConfig>,
+        backupConfigs: List<LlmApiConfig>,
+        getRetryListener: (AnalysisStep) -> (Int) -> Unit,
+        getBackupListener: (AnalysisStep) -> (String) -> Unit
+    ) {
+        val tokenTracker = TokenDeltaTracker()
+        patchRecordResult(recordId) { it.withoutModuleErrors(AnalysisStep.TRANSLATION.name) }
+        try {
+            llmAnalysisService.executeTranslation(
+                text = analysisText,
+                imageBase64 = null,
+                mimeType = null,
+                primaryConfigs = primaryConfigs,
+                backupConfigs = backupConfigs,
+                onRetry = getRetryListener(AnalysisStep.TRANSLATION),
+                onBackup = getBackupListener(AnalysisStep.TRANSLATION),
+                recordId = recordId,
+                stepName = AnalysisStep.TRANSLATION.name
+            ).collect { (obj, meta) ->
+                val delta = tokenTracker.consumeDelta(meta)
+                val nextTranslation = obj?.translation?.takeIf { it.isNotBlank() }
+                if (nextTranslation != null || delta.consumedTokens > 0 || delta.inputTokens > 0 || delta.outputTokens > 0) {
+                    patchRecordResult(recordId) { current ->
+                        val base = if (nextTranslation != null) {
+                            current.copy(translation = nextTranslation)
+                                .withoutModuleErrors(AnalysisStep.TRANSLATION.name)
+                        } else {
+                            current
+                        }
+                        base.addTokenDelta(delta)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            val errorMsg = e.localizedMessage ?: "Unknown error"
+            logStepFailure(recordId, AnalysisStep.TRANSLATION, e)
+            patchRecordResult(recordId) { it.withModuleError(AnalysisStep.TRANSLATION.name, errorMsg) }
+        }
+    }
+
+    private suspend fun runRegenerateClauses(
+        recordId: Int,
+        analysisText: String,
+        primaryConfigs: List<LlmApiConfig>,
+        backupConfigs: List<LlmApiConfig>,
+        getRetryListener: (AnalysisStep) -> (Int) -> Unit,
+        getBackupListener: (AnalysisStep) -> (String) -> Unit
+    ) {
+        val tokenTracker = TokenDeltaTracker()
+        var receivedNonEmpty = false
+        patchRecordResult(recordId) { it.withoutModuleErrors(AnalysisStep.CLAUSE_ANALYSIS.name) }
+        try {
+            llmAnalysisService.executeClauses(
+                text = analysisText,
+                imageBase64 = null,
+                mimeType = null,
+                primaryConfigs = primaryConfigs,
+                backupConfigs = backupConfigs,
+                onRetry = getRetryListener(AnalysisStep.CLAUSE_ANALYSIS),
+                onBackup = getBackupListener(AnalysisStep.CLAUSE_ANALYSIS),
+                recordId = recordId,
+                stepName = AnalysisStep.CLAUSE_ANALYSIS.name
+            ).collect { (obj, meta) ->
+                val delta = tokenTracker.consumeDelta(meta)
+                val nextClauses = obj?.clauses
+                if (!nextClauses.isNullOrEmpty()) {
+                    receivedNonEmpty = true
+                }
+                if (!nextClauses.isNullOrEmpty() || delta.consumedTokens > 0 || delta.inputTokens > 0 || delta.outputTokens > 0) {
+                    patchRecordResult(recordId) { current ->
+                        val base = if (!nextClauses.isNullOrEmpty()) {
+                            current.copy(clauses = nextClauses)
+                                .withoutModuleErrors(AnalysisStep.CLAUSE_ANALYSIS.name)
+                        } else {
+                            current
+                        }
+                        base.addTokenDelta(delta)
+                    }
+                }
+            }
+            if (!receivedNonEmpty) {
+                patchRecordResult(recordId) { current ->
+                    current.copy(clauses = emptyList())
+                        .withoutModuleErrors(AnalysisStep.CLAUSE_ANALYSIS.name)
+                }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            val errorMsg = e.localizedMessage ?: "Unknown error"
+            logStepFailure(recordId, AnalysisStep.CLAUSE_ANALYSIS, e)
+            patchRecordResult(recordId) { it.withModuleError(AnalysisStep.CLAUSE_ANALYSIS.name, errorMsg) }
+        }
+    }
+
+    private suspend fun runRegenerateGrammar(
+        recordId: Int,
+        analysisText: String,
+        primaryConfigs: List<LlmApiConfig>,
+        backupConfigs: List<LlmApiConfig>,
+        getRetryListener: (AnalysisStep) -> (Int) -> Unit,
+        getBackupListener: (AnalysisStep) -> (String) -> Unit
+    ) {
+        val tokenTracker = TokenDeltaTracker()
+        var receivedNonEmpty = false
+        patchRecordResult(recordId) { it.withoutModuleErrors(AnalysisStep.GRAMMAR_EXPLANATION.name) }
+        try {
+            llmAnalysisService.executeGrammar(
+                text = analysisText,
+                imageBase64 = null,
+                mimeType = null,
+                primaryConfigs = primaryConfigs,
+                backupConfigs = backupConfigs,
+                onRetry = getRetryListener(AnalysisStep.GRAMMAR_EXPLANATION),
+                onBackup = getBackupListener(AnalysisStep.GRAMMAR_EXPLANATION),
+                recordId = recordId,
+                stepName = AnalysisStep.GRAMMAR_EXPLANATION.name
+            ).collect { (obj, meta) ->
+                val delta = tokenTracker.consumeDelta(meta)
+                val nextPoints = obj?.grammarPoints
+                if (!nextPoints.isNullOrEmpty()) {
+                    receivedNonEmpty = true
+                }
+                if (!nextPoints.isNullOrEmpty() || delta.consumedTokens > 0 || delta.inputTokens > 0 || delta.outputTokens > 0) {
+                    patchRecordResult(recordId) { current ->
+                        val base = if (!nextPoints.isNullOrEmpty()) {
+                            current.copy(grammarPoints = nextPoints)
+                                .withoutModuleErrors(AnalysisStep.GRAMMAR_EXPLANATION.name)
+                        } else {
+                            current
+                        }
+                        base.addTokenDelta(delta)
+                    }
+                }
+            }
+            if (!receivedNonEmpty) {
+                patchRecordResult(recordId) { current ->
+                    current.copy(grammarPoints = emptyList())
+                        .withoutModuleErrors(AnalysisStep.GRAMMAR_EXPLANATION.name)
+                }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            val errorMsg = e.localizedMessage ?: "Unknown error"
+            logStepFailure(recordId, AnalysisStep.GRAMMAR_EXPLANATION, e)
+            patchRecordResult(recordId) { it.withModuleError(AnalysisStep.GRAMMAR_EXPLANATION.name, errorMsg) }
+        }
+    }
+
+    private suspend fun runRegenerateVocabulary(
+        recordId: Int,
+        analysisText: String,
+        retokenize: Boolean,
+        tokenizerConfigs: List<LlmApiConfig>,
+        segmentsConfigs: List<LlmApiConfig>,
+        backupConfigs: List<LlmApiConfig>,
+        decisionConfigs: List<LlmApiConfig>,
+        getRetryListener: (AnalysisStep) -> (Int) -> Unit,
+        getBackupListener: (AnalysisStep) -> (String) -> Unit
+    ) {
+        val currentRecord = saveAnalysisRecordUseCase.getById(recordId) ?: return
+        val existingDetail = detailedResultSerializer.fromJson(currentRecord.analysisResult)
+        val existingTokens = existingDetail?.segments
+            .orEmpty()
+            .mapNotNull { it.text?.takeIf { t -> t.isNotBlank() } }
+        val hasTokenizerError = existingDetail?.moduleErrors?.containsKey(AnalysisStep.TOKENIZATION.name) == true
+        val effectiveRetokenize = retokenize || existingTokens.isEmpty() || hasTokenizerError
+
+        var tokens = existingTokens
+        if (effectiveRetokenize) {
+            patchRecordResult(recordId) {
+                it.withoutModuleErrors(
+                    AnalysisStep.TOKENIZATION.name,
+                    AnalysisStep.DETAILED_GRAMMAR.name,
+                    AnalysisStep.DECISION_POS.name
+                )
+            }
+            val tokenTracker = TokenDeltaTracker()
+            val imageTokenizerMode = settingsRepository.getImageTokenizerMode()
+            var newTokens = emptyList<String>()
+            try {
+                llmAnalysisService.executeTokenizer(
+                    text = analysisText,
+                    imageBase64 = null,
+                    mimeType = null,
+                    isOcrMode = false,
+                    imageTokenizerMode = imageTokenizerMode,
+                    primaryConfigs = tokenizerConfigs,
+                    backupConfigs = backupConfigs,
+                    onRetry = getRetryListener(AnalysisStep.TOKENIZATION),
+                    onBackup = getBackupListener(AnalysisStep.TOKENIZATION),
+                    recordId = recordId,
+                    stepName = AnalysisStep.TOKENIZATION.name
+                ).collect { (tokenObj, meta) ->
+                    val delta = tokenTracker.consumeDelta(meta)
+                    val parsedTokens = tokenObj?.tokens.orEmpty().filter { it.isNotBlank() }
+                    if (parsedTokens.isNotEmpty()) {
+                        newTokens = parsedTokens
+                    }
+                    if (parsedTokens.isNotEmpty() || delta.consumedTokens > 0 || delta.inputTokens > 0 || delta.outputTokens > 0) {
+                        patchRecordResult(recordId) { current ->
+                            val base = if (parsedTokens.isNotEmpty()) {
+                                current.copy(segments = parsedTokens.map { WordSegment(text = it) })
+                                    .withoutModuleErrors(AnalysisStep.TOKENIZATION.name)
+                            } else {
+                                current
+                            }
+                            base.addTokenDelta(delta)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                val errorMsg = e.localizedMessage ?: "Tokenizer failed"
+                logStepFailure(recordId, AnalysisStep.TOKENIZATION, e)
+                patchRecordResult(recordId) { current ->
+                    current.withModuleError(AnalysisStep.TOKENIZATION.name, errorMsg)
+                }
+                return
+            }
+
+            if (newTokens.isEmpty()) {
+                val errorMsg = "Tokenizer returned empty tokens"
+                patchRecordResult(recordId) { current ->
+                    current.withModuleError(AnalysisStep.TOKENIZATION.name, errorMsg)
+                }
+                return
+            }
+            tokens = newTokens
+        } else {
+            patchRecordResult(recordId) {
+                it.withoutModuleErrors(
+                    AnalysisStep.DETAILED_GRAMMAR.name,
+                    AnalysisStep.DECISION_POS.name
+                )
+            }
+        }
+
+        val useDecisionPos = decisionConfigs.isNotEmpty()
+        val mergeMutex = Mutex()
+        var decisionSegments: List<WordSegment>? = null
+
+        supervisorScope {
+            if (useDecisionPos) {
+                launch {
+                    try {
+                        val (classified, meta) = decisionRepository.classifyTokenPos(
+                            sentence = analysisText,
+                            tokens = tokens,
+                            configs = decisionConfigs,
+                            recordId = recordId,
+                            stepName = AnalysisStep.DECISION_POS.name
+                        )
+                        mergeMutex.withLock {
+                            decisionSegments = classified
+                            patchRecordResult(recordId) { current ->
+                                val baseSegments = current.segments ?: tokens.map { WordSegment(text = it) }
+                                val merged = SegmentMergeHelper.mergeDecisionPos(baseSegments, classified)
+                                current.copy(segments = merged)
+                                    .withoutModuleErrors(AnalysisStep.DECISION_POS.name)
+                                    .addTokenDelta(meta)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        val errorMsg = e.localizedMessage ?: "Decision POS classification failed"
+                        logStepFailure(recordId, AnalysisStep.DECISION_POS, e)
+                        patchRecordResult(recordId) { it.withModuleError(AnalysisStep.DECISION_POS.name, errorMsg) }
+                    }
+                }
+            }
+
+            launch {
+                val segTokenTracker = TokenDeltaTracker()
+                try {
+                    llmAnalysisService.executeSegments(
+                        text = analysisText,
+                        tokens = tokens,
+                        imageBase64 = null,
+                        mimeType = null,
+                        primaryConfigs = segmentsConfigs,
+                        backupConfigs = backupConfigs,
+                        onRetry = getRetryListener(AnalysisStep.DETAILED_GRAMMAR),
+                        onBackup = getBackupListener(AnalysisStep.DETAILED_GRAMMAR),
+                        recordId = recordId,
+                        stepName = AnalysisStep.DETAILED_GRAMMAR.name,
+                        decoupledPosMode = useDecisionPos
+                    ).collect { (segObj, meta) ->
+                        val delta = segTokenTracker.consumeDelta(meta)
+                        mergeMutex.withLock {
+                            val merged = segObj?.segments?.takeIf { it.isNotEmpty() }?.let { detailSegs ->
+                                SegmentMergeHelper.mergeDetailSegments(detailSegs, decisionSegments)
+                            }
+                            if (merged != null || delta.consumedTokens > 0 || delta.inputTokens > 0 || delta.outputTokens > 0) {
+                                patchRecordResult(recordId) { current ->
+                                    val base = if (merged != null) {
+                                        current.copy(segments = merged)
+                                            .withoutModuleErrors(AnalysisStep.DETAILED_GRAMMAR.name)
+                                    } else {
+                                        current
+                                    }
+                                    base.addTokenDelta(delta)
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    val errorMsg = e.localizedMessage ?: "Unknown error"
+                    logStepFailure(recordId, AnalysisStep.DETAILED_GRAMMAR, e)
+                    patchRecordResult(recordId) { it.withModuleError(AnalysisStep.DETAILED_GRAMMAR.name, errorMsg) }
+                }
             }
         }
     }

@@ -6,6 +6,7 @@ import com.example.japanesegrammarapp.domain.model.DailyTokenUsage
 import com.example.japanesegrammarapp.domain.model.DetailedAnalysisResult
 import com.example.japanesegrammarapp.domain.model.HistoryExportPreview
 import com.example.japanesegrammarapp.domain.model.ModelTokenUsage
+import com.example.japanesegrammarapp.domain.model.RegeneratableModule
 import com.example.japanesegrammarapp.domain.repository.AppLogWriter
 import com.example.japanesegrammarapp.domain.repository.HistoryRepository
 import com.example.japanesegrammarapp.domain.repository.SettingsRepository
@@ -25,6 +26,7 @@ class ExternalTextIntakeUseCaseTest {
         private val shouldThrow: Boolean = false
     ) : AnalysisTaskManager {
         override val progressFlow: StateFlow<Map<Int, AnalysisProgress>> = MutableStateFlow(emptyMap())
+        override val regeneratingModulesFlow: StateFlow<Map<Int, Set<RegeneratableModule>>> = MutableStateFlow(emptyMap())
         val executedTexts = mutableListOf<String>()
 
         override suspend fun execute(
@@ -41,6 +43,7 @@ class ExternalTextIntakeUseCaseTest {
         }
 
         override suspend fun executeRetry(recordId: Int, text: String, imageUri: String?) = Unit
+        override suspend fun regenerateModule(recordId: Int, module: RegeneratableModule) = Unit
         override fun cancel(recordId: Int) = Unit
         override fun parseDetailedResult(originalText: String, jsonString: String?): DetailedAnalysisResult? = null
     }

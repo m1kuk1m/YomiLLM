@@ -78,6 +78,7 @@ class SettingsViewModel @Inject constructor(
             val useBackupApi = settingsRepository.getUseBackupApi()
             val autoRetryOnError = settingsRepository.getAutoRetryOnError()
             val failoverToNextEndpoint = settingsRepository.getFailoverToNextEndpoint()
+            val streamingEnabled = settingsRepository.getStreamingEnabled()
             val decisionApiEnabled = settingsRepository.getDecisionApiEnabled()
             val decisionModel = settingsRepository.getDecisionModel()
             val componentLabels = com.example.japanesegrammarapp.domain.model.AnalysisModule.entries.map { it.id }
@@ -124,6 +125,7 @@ class SettingsViewModel @Inject constructor(
                     useBackupApi = useBackupApi,
                     autoRetryOnError = autoRetryOnError,
                     failoverToNextEndpoint = failoverToNextEndpoint,
+                    streamingEnabled = streamingEnabled,
                     decisionApiEnabled = decisionApiEnabled,
                     decisionModel = decisionModel,
                     decisionEndpoints = decisionEndpoints,
@@ -1034,6 +1036,11 @@ class SettingsViewModel @Inject constructor(
     fun setFailoverToNextEndpoint(value: Boolean) {
         settingsRepository.setFailoverToNextEndpoint(value)
         _uiState.update { it.copy(failoverToNextEndpoint = value) }
+    }
+
+    fun setStreamingEnabled(value: Boolean) {
+        settingsRepository.setStreamingEnabled(value)
+        _uiState.update { it.copy(streamingEnabled = value) }
     }
 
     fun setDecisionApiEnabled(value: Boolean) {

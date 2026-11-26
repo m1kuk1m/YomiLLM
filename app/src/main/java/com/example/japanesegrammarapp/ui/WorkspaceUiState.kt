@@ -1,8 +1,9 @@
 package com.example.japanesegrammarapp.ui
 
 import com.example.japanesegrammarapp.domain.model.AnalysisDomainRecord
-import com.example.japanesegrammarapp.domain.usecase.AnalysisProgress
 import com.example.japanesegrammarapp.domain.model.DetailedAnalysisResult
+import com.example.japanesegrammarapp.domain.model.RegeneratableModule
+import com.example.japanesegrammarapp.domain.usecase.AnalysisProgress
 
 data class WorkspaceUiState(
     val activeProvider: String = "Gemini",
@@ -18,6 +19,7 @@ data class WorkspaceUiState(
     val detailedResult: DetailedAnalysisResult? = null,
     val isParsingDetailedResult: Boolean = false,
     val selectedRecordProgress: AnalysisProgress? = null,
+    val regeneratingModules: Set<RegeneratableModule> = emptySet(),
     val wallpaperUri: String = "",
     val isExternalQuery: Boolean = false,
     /** segmentText values bookmarked for the currently selected record */

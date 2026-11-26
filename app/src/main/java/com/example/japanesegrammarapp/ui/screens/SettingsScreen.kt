@@ -766,7 +766,8 @@ fun SettingsScreen(
                                     onActiveProviderChange = viewModel::setActiveProvider,
                                     onActiveModelChange = viewModel::setActiveModel,
                                     onOpenCotDialog = { showCotDepthDialog = true },
-                                    onOpenComponentModelDialog = { showComponentModelDialog = true }
+                                    onOpenComponentModelDialog = { showComponentModelDialog = true },
+                                    onStreamingEnabledChange = viewModel::setStreamingEnabled
                                 )
 
                                 SettingsCredentialsSection(

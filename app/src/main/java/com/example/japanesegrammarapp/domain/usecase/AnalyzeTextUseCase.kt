@@ -1,6 +1,7 @@
 package com.example.japanesegrammarapp.domain.usecase
 
 import com.example.japanesegrammarapp.domain.model.DetailedAnalysisResult
+import com.example.japanesegrammarapp.domain.model.RegeneratableModule
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -10,6 +11,7 @@ class AnalyzeTextUseCase @Inject constructor(
     private val taskManager: AnalysisTaskManager
 ) {
     val progressFlow: StateFlow<Map<Int, AnalysisProgress>> = taskManager.progressFlow
+    val regeneratingModulesFlow: StateFlow<Map<Int, Set<RegeneratableModule>>> = taskManager.regeneratingModulesFlow
 
     suspend fun execute(
         text: String,
@@ -22,6 +24,10 @@ class AnalyzeTextUseCase @Inject constructor(
 
     suspend fun executeRetry(recordId: Int, text: String, imageUri: String?) {
         taskManager.executeRetry(recordId, text, imageUri)
+    }
+
+    suspend fun regenerateModule(recordId: Int, module: RegeneratableModule) {
+        taskManager.regenerateModule(recordId, module)
     }
 
     fun cancel(recordId: Int) {

@@ -369,6 +369,23 @@ class SettingsRepositoryImplTest {
         assertTrue(reloaded.getSilentBackgroundMode())
     }
 
+    @Test
+    fun streamingEnabledDefaultsToTrueAndPersists() {
+        val standardPrefs = TestSharedPreferences()
+        val repository = newRepository(standardPrefs)
+
+        assertTrue(repository.getStreamingEnabled())
+
+        repository.setStreamingEnabled(false)
+        assertFalse(repository.getStreamingEnabled())
+
+        val reloaded = newRepository(standardPrefs)
+        assertFalse(reloaded.getStreamingEnabled())
+
+        reloaded.setStreamingEnabled(true)
+        assertTrue(newRepository(standardPrefs).getStreamingEnabled())
+    }
+
     private fun newRepository(
         standardPrefs: TestSharedPreferences = TestSharedPreferences(),
         securePrefs: TestSharedPreferences = TestSharedPreferences()

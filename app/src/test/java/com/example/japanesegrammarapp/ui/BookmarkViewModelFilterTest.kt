@@ -276,6 +276,8 @@ class BookmarkViewModelFilterTest {
         override fun setAutoRetryOnError(value: Boolean) = Unit
         override fun getFailoverToNextEndpoint(): Boolean = false
         override fun setFailoverToNextEndpoint(value: Boolean) = Unit
+        override fun getStreamingEnabled(): Boolean = true
+        override fun setStreamingEnabled(value: Boolean) = Unit
 
         override fun getAllProviders(): List<String> = listOf("Gemini")
         override fun getBaseProviderType(providerId: String): String = providerId

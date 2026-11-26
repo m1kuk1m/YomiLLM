@@ -57,6 +57,8 @@ interface SettingsRepository {
     fun setAutoRetryOnError(value: Boolean)
     fun getFailoverToNextEndpoint(): Boolean
     fun setFailoverToNextEndpoint(value: Boolean)
+    fun getStreamingEnabled(): Boolean
+    fun setStreamingEnabled(value: Boolean)
 
     // Decision Model API Settings
     fun getDecisionApiEnabled(): Boolean

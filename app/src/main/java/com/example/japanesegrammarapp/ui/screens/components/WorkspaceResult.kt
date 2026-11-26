@@ -27,6 +27,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -48,13 +49,13 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -74,8 +75,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.japanesegrammarapp.R
 import com.example.japanesegrammarapp.domain.model.AnalysisStatus
-import com.example.japanesegrammarapp.domain.model.WordSegment
+import com.example.japanesegrammarapp.domain.model.AnalysisStep
 import com.example.japanesegrammarapp.domain.model.DetailedAnalysisResult
+import com.example.japanesegrammarapp.domain.model.RegeneratableModule
+import com.example.japanesegrammarapp.domain.model.WordSegment
 import com.example.japanesegrammarapp.domain.model.dictionaryQueryWord
 import com.example.japanesegrammarapp.domain.repository.UiPreferencesRepository
 import com.example.japanesegrammarapp.ui.WorkspaceUiState
@@ -116,6 +119,7 @@ fun WorkspaceResultContent(
     onToggleBookmark: (WordSegment) -> Unit = {},
     onEditWordSegment: (WordSegment) -> Unit = {},
     onToggleGrammarBookmark: (pattern: String, explanation: String?, sourceText: String) -> Unit = { _, _, _ -> },
+    onRegenerateModule: (RegeneratableModule) -> Unit = {},
     onLoadNewer: () -> Unit = {},
     onLoadOlder: () -> Unit = {},
     uiPreferencesRepository: UiPreferencesRepository,
@@ -397,6 +401,21 @@ fun WorkspaceResultContent(
                     .padding(vertical = 8.dp)
             ) {
                     Spacer(modifier = Modifier.height(topPadding + 10.dp))
+                    val canRegenerate = !isPending &&
+                        (uiState.selectedRecord?.id ?: 0) > 0 &&
+                        !uiState.selectedRecord?.originalText.isNullOrBlank()
+                    val isRegeneratingVocab = RegeneratableModule.TOKENIZATION_AND_SEGMENTS in uiState.regeneratingModules ||
+                        RegeneratableModule.SEGMENTS_ONLY in uiState.regeneratingModules
+                    val isRegeneratingTranslation = RegeneratableModule.TRANSLATION in uiState.regeneratingModules
+                    val isRegeneratingClauses = RegeneratableModule.CLAUSES in uiState.regeneratingModules
+                    val isRegeneratingGrammar = RegeneratableModule.GRAMMAR in uiState.regeneratingModules
+
+                    val tokenizerError = progress?.stepErrors?.get(AnalysisStep.TOKENIZATION.name)
+                        ?: data.moduleErrors?.get(AnalysisStep.TOKENIZATION.name)
+                    val detailSegmentsError = progress?.stepErrors?.get(AnalysisStep.DETAILED_GRAMMAR.name)
+                        ?: data.moduleErrors?.get(AnalysisStep.DETAILED_GRAMMAR.name)
+                    val segmentError = detailSegmentsError ?: tokenizerError
+
                     // 1. Target Sentence Header with clickable chips
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -419,18 +438,34 @@ fun WorkspaceResultContent(
                             color = SumiInk
                         )
                         Spacer(modifier = Modifier.weight(1f))
-                        Crossfade(
-                            targetState = isPlayingTts,
-                            animationSpec = tween(250),
-                            label = "ttsIcon"
-                        ) { playing ->
-                            if (playing) {
-                                IconButton(onClick = onStopTts, modifier = Modifier.size(28.dp)) {
-                                    Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.stop_tts), tint = SumiInk.copy(alpha = 0.7f))
-                                }
-                            } else {
-                                IconButton(onClick = onPlayTts, modifier = Modifier.size(28.dp)) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = stringResource(R.string.play_tts), tint = SumiInk.copy(alpha = 0.7f))
+                        Surface(
+                            shape = CircleShape,
+                            color = ZenThemeColors.pillBg(),
+                            modifier = Modifier.size(30.dp)
+                        ) {
+                            Crossfade(
+                                targetState = isPlayingTts,
+                                animationSpec = tween(250),
+                                label = "ttsIcon"
+                            ) { playing ->
+                                if (playing) {
+                                    IconButton(onClick = onStopTts, modifier = Modifier.fillMaxSize()) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Stop,
+                                            contentDescription = stringResource(R.string.stop_tts),
+                                            tint = SumiInk.copy(alpha = 0.78f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                } else {
+                                    IconButton(onClick = onPlayTts, modifier = Modifier.fillMaxSize()) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.PlayArrow,
+                                            contentDescription = stringResource(R.string.play_tts),
+                                            tint = SumiInk.copy(alpha = 0.78f),
+                                            modifier = Modifier.size(19.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -444,9 +479,9 @@ fun WorkspaceResultContent(
                         tonalElevation = 0.dp
                     ) {
                         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                            val segmentError = progress?.stepErrors?.get("DETAILED_GRAMMAR")
-                                ?: progress?.stepErrors?.get("TOKENIZATION")
-                            val isLoadingExplain = isPending && progress?.segmentsCompleted != true && !data.segments.isNullOrEmpty() && segmentError == null
+                            val isLoadingExplain = ((isPending && progress?.segmentsCompleted != true) || isRegeneratingVocab) &&
+                                !data.segments.isNullOrEmpty() &&
+                                segmentError == null
                             
                             AnimatedVisibility(
                                 visible = isLoadingExplain,
@@ -465,23 +500,13 @@ fun WorkspaceResultContent(
                             }
                             
                             if (segmentError != null) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Warning,
-                                        contentDescription = "Error",
-                                        tint = Color.Red,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = segmentError,
-                                        color = Color.Red,
-                                        fontSize = 13.sp
-                                    )
-                                }
+                                ModuleErrorBanner(
+                                    errorMessage = segmentError,
+                                    canRegenerate = canRegenerate,
+                                    isRegenerating = isRegeneratingVocab,
+                                    onRegenerate = { onRegenerateModule(RegeneratableModule.TOKENIZATION_AND_SEGMENTS) },
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
                             }
                             
                             FlowRow(
@@ -490,7 +515,7 @@ fun WorkspaceResultContent(
                                 verticalArrangement = Arrangement.spacedBy(10.dp * uiState.cardSpacingScale)
                             ) {
                                 if (data.segments.isNullOrEmpty()) {
-                                    if (segmentError == null && isPending) {
+                                    if (segmentError == null && (isPending || isRegeneratingVocab)) {
                                         CircularProgressIndicator(
                                             modifier = Modifier.size(24.dp).align(Alignment.CenterVertically),
                                             color = SumiInk.copy(alpha = 0.5f),
@@ -498,6 +523,12 @@ fun WorkspaceResultContent(
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(stringResource(R.string.segmenting_text), color = SumiInk.copy(alpha = 0.5f), fontSize = 14.sp)
+                                    } else if (segmentError == null) {
+                                        Text(
+                                            text = stringResource(R.string.module_empty_placeholder),
+                                            color = SumiInk.copy(alpha = 0.45f),
+                                            fontSize = 13.sp
+                                        )
                                     }
                                 } else {
                                     data.segments.forEachIndexed { index, segment ->
@@ -658,6 +689,8 @@ fun WorkspaceResultContent(
                     Spacer(modifier = Modifier.height(6.dp))
                     
                     // 2. Overall Sentence Translation
+                    val translationError = progress?.stepErrors?.get(AnalysisStep.TRANSLATION.name)
+                        ?: data.moduleErrors?.get(AnalysisStep.TRANSLATION.name)
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -690,12 +723,35 @@ fun WorkspaceResultContent(
                             shadowElevation = 3.dp,
                             tonalElevation = 0.dp
                         ) {
-                            SelectionContainer {
+                            Column(modifier = Modifier.animateContentSize().padding(16.dp)) {
+                                AnimatedVisibility(
+                                    visible = isRegeneratingTranslation && !data.translation.isNullOrBlank(),
+                                    enter = expandVertically() + fadeIn(),
+                                    exit = shrinkVertically() + fadeOut()
+                                ) {
+                                    LinearProgressIndicator(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 10.dp)
+                                            .height(3.dp)
+                                            .clip(RoundedCornerShape(2.dp)),
+                                        color = SakuraPink,
+                                        trackColor = SumiInk.copy(alpha = 0.05f)
+                                    )
+                                }
+                                if (translationError != null && !data.translation.isNullOrBlank()) {
+                                    ModuleErrorBanner(
+                                        errorMessage = translationError,
+                                        canRegenerate = canRegenerate,
+                                        isRegenerating = isRegeneratingTranslation,
+                                        onRegenerate = { onRegenerateModule(RegeneratableModule.TRANSLATION) },
+                                        modifier = Modifier.padding(bottom = 8.dp)
+                                    )
+                                }
                                 Row(
-                                    modifier = Modifier.animateContentSize().padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                     Surface(
+                                    Surface(
                                         color = if (ZenThemeColors.isDark()) Color(0xFF3D1E1E) else SakuraPink,
                                         shape = RoundedCornerShape(4.dp),
                                         modifier = Modifier.padding(end = 12.dp)
@@ -708,9 +764,11 @@ fun WorkspaceResultContent(
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                         )
                                     }
-                                    val translationError = progress?.stepErrors?.get("TRANSLATION")
+                                    val isTranslationLoading = data.translation.isNullOrBlank() &&
+                                        ((isPending && progress?.translationCompleted != true) || isRegeneratingTranslation) &&
+                                        translationError == null
                                     AnimatedContent(
-                                        targetState = data.translation.isNullOrBlank() && isPending && translationError == null,
+                                        targetState = isTranslationLoading,
                                         label = "TranslationAnimation",
                                         modifier = Modifier.weight(1f)
                                     ) { isLoading ->
@@ -719,35 +777,31 @@ fun WorkspaceResultContent(
                                                 ShimmerSkeleton(modifier = Modifier.fillMaxWidth().height(16.dp))
                                                 ShimmerSkeleton(modifier = Modifier.fillMaxWidth(0.7f).height(16.dp))
                                             }
-                                        } else if (translationError != null) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Warning,
-                                                    contentDescription = "Error",
-                                                    tint = Color.Red,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = translationError,
-                                                    color = Color.Red,
+                                        } else if (translationError != null && data.translation.isNullOrBlank()) {
+                                            ModuleErrorBanner(
+                                                errorMessage = translationError,
+                                                canRegenerate = canRegenerate,
+                                                isRegenerating = isRegeneratingTranslation,
+                                                onRegenerate = { onRegenerateModule(RegeneratableModule.TRANSLATION) }
+                                            )
+                                        } else if (data.translation.isNullOrBlank()) {
+                                            Text(
+                                                text = stringResource(R.string.module_empty_placeholder),
+                                                fontSize = 13.sp,
+                                                color = SumiInk.copy(alpha = 0.45f)
+                                            )
+                                        } else {
+                                            SelectionContainer {
+                                                StreamingText(
+                                                    text = data.translation.orEmpty(),
+                                                    isStreaming = (isPending && progress?.translationCompleted != true) || isRegeneratingTranslation,
                                                     fontSize = 14.sp,
-                                                    fontWeight = FontWeight.Medium
+                                                    fontWeight = FontWeight.Medium,
+                                                    color = SumiInk,
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    lineHeight = 20.sp
                                                 )
                                             }
-                                        } else {
-                                            StreamingText(
-                                                text = data.translation ?: "",
-                                                isStreaming = isPending,
-                                                fontSize = 14.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                color = SumiInk,
-                                                modifier = Modifier.fillMaxWidth(),
-                                                lineHeight = 20.sp
-                                            )
                                         }
                                     }
                                 }
@@ -757,7 +811,12 @@ fun WorkspaceResultContent(
                     Spacer(modifier = Modifier.height(6.dp))
                     
                     // 3. Sentence Clauses
-                    if (!data.clauses.isNullOrEmpty() || (isPending && progress != null && progress.clausesCompleted != true)) {
+                    val clausesError = progress?.stepErrors?.get(AnalysisStep.CLAUSE_ANALYSIS.name)
+                        ?: data.moduleErrors?.get(AnalysisStep.CLAUSE_ANALYSIS.name)
+                    val isClausesLoading = data.clauses.isNullOrEmpty() &&
+                        ((isPending && progress != null && progress.clausesCompleted != true) || isRegeneratingClauses) &&
+                        clausesError == null
+                    run {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
@@ -790,113 +849,143 @@ fun WorkspaceResultContent(
                             shadowElevation = 3.dp,
                             tonalElevation = 0.dp
                         ) {
-                            SelectionContainer {
-                                Column(modifier = Modifier.animateContentSize().padding(16.dp)) {
-                                    val clausesError = progress?.stepErrors?.get("CLAUSE_ANALYSIS")
-                                    AnimatedContent(
-                                        targetState = data.clauses.isNullOrEmpty() && isPending && clausesError == null,
-                                        label = "ClausesAnimation"
-                                    ) { isLoading ->
-                                        if (isLoading) {
-                                            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                                                repeat(2) {
-                                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                                                        ShimmerSkeleton(modifier = Modifier.width(14.dp).height(14.dp).padding(top = 4.dp))
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                                                ShimmerSkeleton(modifier = Modifier.width(36.dp).height(18.dp))
-                                                                ShimmerSkeleton(modifier = Modifier.width(60.dp).height(18.dp))
-                                                            }
-                                                            ShimmerSkeleton(modifier = Modifier.fillMaxWidth().height(12.dp))
-                                                            ShimmerSkeleton(modifier = Modifier.fillMaxWidth(0.5f).height(12.dp))
+                            Column(modifier = Modifier.animateContentSize().padding(16.dp)) {
+                                AnimatedVisibility(
+                                    visible = isRegeneratingClauses && !data.clauses.isNullOrEmpty(),
+                                    enter = expandVertically() + fadeIn(),
+                                    exit = shrinkVertically() + fadeOut()
+                                ) {
+                                    LinearProgressIndicator(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 10.dp)
+                                            .height(3.dp)
+                                            .clip(RoundedCornerShape(2.dp)),
+                                        color = AizomeIndigo,
+                                        trackColor = SumiInk.copy(alpha = 0.05f)
+                                    )
+                                }
+                                if (clausesError != null && !data.clauses.isNullOrEmpty()) {
+                                    ModuleErrorBanner(
+                                        errorMessage = clausesError,
+                                        canRegenerate = canRegenerate,
+                                        isRegenerating = isRegeneratingClauses,
+                                        onRegenerate = { onRegenerateModule(RegeneratableModule.CLAUSES) },
+                                        modifier = Modifier.padding(bottom = 10.dp)
+                                    )
+                                }
+                                AnimatedContent(
+                                    targetState = isClausesLoading,
+                                    label = "ClausesAnimation"
+                                ) { isLoading ->
+                                    if (isLoading) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                                            repeat(2) {
+                                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                                                    ShimmerSkeleton(modifier = Modifier.width(14.dp).height(14.dp).padding(top = 4.dp))
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                            ShimmerSkeleton(modifier = Modifier.width(36.dp).height(18.dp))
+                                                            ShimmerSkeleton(modifier = Modifier.width(60.dp).height(18.dp))
                                                         }
+                                                        ShimmerSkeleton(modifier = Modifier.fillMaxWidth().height(12.dp))
+                                                        ShimmerSkeleton(modifier = Modifier.fillMaxWidth(0.5f).height(12.dp))
                                                     }
                                                 }
                                             }
-                                        } else if (clausesError != null) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Warning,
-                                                    contentDescription = "Error",
-                                                    tint = Color.Red,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = clausesError,
-                                                    color = Color.Red,
-                                                    fontSize = 13.sp
-                                                )
-                                            }
-                                        } else {
-                                            Column {
-                                                data.clauses?.forEachIndexed { idx, clause ->
-                                                    key("clause_${clause.index ?: idx}") {
-                                                        val visibleState = remember(clause) { androidx.compose.animation.core.MutableTransitionState(!isPending) }.apply { targetState = true }
-                                                        AnimatedVisibility(
-                                                            visibleState = visibleState,
-                                                            enter = if (!isPending) androidx.compose.animation.EnterTransition.None else fadeIn() + slideInVertically(initialOffsetY = { 20 })
-                                                        ) {
-                                                            Column {
-                                                                Row(
-                                                                    modifier = Modifier.fillMaxWidth(),
-                                                                    verticalAlignment = Alignment.Top
-                                                                ) {
-                                                                    Text(
-                                                                        text = "${clause.index}.",
-                                                                        fontSize = 14.sp,
-                                                                        fontWeight = FontWeight.Bold,
-                                                                        color = SumiInk,
-                                                                        modifier = Modifier.width(22.dp)
-                                                                    )
-                                                                    Column(modifier = Modifier.weight(1f)) {
-                                                                        // FlowRow: 長いロールラベルとテキストが1行に収まらない場合、
-                                                                        // テキストを縦一列に潰さず次の行へ折り返す
-                                                                        FlowRow(
-                                                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        }
+                                    } else if (clausesError != null && data.clauses.isNullOrEmpty()) {
+                                        ModuleErrorBanner(
+                                            errorMessage = clausesError,
+                                            canRegenerate = canRegenerate,
+                                            isRegenerating = isRegeneratingClauses,
+                                            onRegenerate = { onRegenerateModule(RegeneratableModule.CLAUSES) },
+                                            modifier = Modifier.padding(vertical = 4.dp)
+                                        )
+                                    } else if (data.clauses.isNullOrEmpty()) {
+                                        Text(
+                                            text = stringResource(R.string.module_empty_placeholder),
+                                            fontSize = 13.sp,
+                                            color = SumiInk.copy(alpha = 0.45f)
+                                        )
+                                    } else {
+                                        val isClausesStreaming = (isPending && progress?.clausesCompleted != true) || isRegeneratingClauses
+                                        val clausesList = data.clauses.orEmpty()
+                                        Column {
+                                            clausesList.forEachIndexed { idx, clause ->
+                                                key("clause_${clause.index ?: idx}") {
+                                                    val visibleState = remember(clause) { androidx.compose.animation.core.MutableTransitionState(!isClausesStreaming) }.apply { targetState = true }
+                                                    AnimatedVisibility(
+                                                        visibleState = visibleState,
+                                                        enter = if (!isClausesStreaming) androidx.compose.animation.EnterTransition.None else fadeIn() + slideInVertically(initialOffsetY = { 20 })
+                                                    ) {
+                                                        Column {
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                verticalAlignment = Alignment.Top
+                                                            ) {
+                                                                Text(
+                                                                    text = "${clause.index}.",
+                                                                    fontSize = 14.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = SumiInk,
+                                                                    modifier = Modifier.width(22.dp)
+                                                                )
+                                                                Column(modifier = Modifier.weight(1f)) {
+                                                                    // FlowRow: 長いロールラベルとテキストが1行に収まらない場合、
+                                                                    // テキストを縦一列に潰さず次の行へ折り返す
+                                                                    FlowRow(
+                                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                                                    ) {
+                                                                        Surface(
+                                                                            color = AizomeIndigo.copy(alpha = 0.35f),
+                                                                            shape = RoundedCornerShape(4.dp),
+                                                                            modifier = Modifier.align(Alignment.CenterVertically)
                                                                         ) {
-                                                                            Surface(
-                                                                                color = AizomeIndigo.copy(alpha = 0.35f),
-                                                                                shape = RoundedCornerShape(4.dp),
+                                                                            Text(
+                                                                                text = clause.role ?: "",
+                                                                                fontSize = 10.sp,
+                                                                                fontWeight = FontWeight.Bold,
+                                                                                color = SumiInk,
+                                                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                            )
+                                                                        }
+                                                                        val clauseText = clause.text.orEmpty()
+                                                                        if (clauseText.isNotBlank()) {
+                                                                            SelectionContainer(
                                                                                 modifier = Modifier.align(Alignment.CenterVertically)
                                                                             ) {
                                                                                 Text(
-                                                                                    text = clause.role ?: "",
-                                                                                    fontSize = 10.sp,
+                                                                                    text = clauseText,
+                                                                                    fontSize = 14.sp,
                                                                                     fontWeight = FontWeight.Bold,
-                                                                                    color = SumiInk,
-                                                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                                    color = SumiInk
                                                                                 )
                                                                             }
-                                                                            Text(
-                                                                                text = clause.text ?: "",
-                                                                                fontSize = 14.sp,
-                                                                                fontWeight = FontWeight.Bold,
-                                                                                color = SumiInk,
-                                                                                modifier = Modifier.align(Alignment.CenterVertically)
+                                                                        }
+                                                                    }
+                                                                    val clauseExplanation = clause.explanation.orEmpty()
+                                                                    if (clauseExplanation.isNotBlank()) {
+                                                                        Spacer(modifier = Modifier.height(4.dp))
+                                                                        SelectionContainer {
+                                                                            StreamingText(
+                                                                                text = clauseExplanation,
+                                                                                isStreaming = isClausesStreaming,
+                                                                                fontSize = 13.sp,
+                                                                                color = SumiInk.copy(alpha = 0.7f),
+                                                                                lineHeight = 18.sp
                                                                             )
                                                                         }
-                                                                        Spacer(modifier = Modifier.height(4.dp))
-                                                                        StreamingText(
-                                                                            text = clause.explanation ?: "",
-                                                                            isStreaming = isPending,
-                                                                            fontSize = 13.sp,
-                                                                            color = SumiInk.copy(alpha = 0.7f),
-                                                                            lineHeight = 18.sp
-                                                                        )
                                                                     }
                                                                 }
-                                                                if (idx < (data.clauses?.size ?: 0) - 1) {
-                                                                    Divider(
-                                                                        modifier = Modifier.padding(vertical = 12.dp),
-                                                                        color = SumiInk.copy(alpha = 0.08f)
-                                                                    )
-                                                                }
+                                                            }
+                                                            if (idx < clausesList.size - 1) {
+                                                                Divider(
+                                                                    modifier = Modifier.padding(vertical = 12.dp),
+                                                                    color = SumiInk.copy(alpha = 0.08f)
+                                                                )
                                                             }
                                                         }
                                                     }
@@ -911,7 +1000,12 @@ fun WorkspaceResultContent(
                     }
                     
                     // 4. Core Grammar Points
-                    if (!data.grammarPoints.isNullOrEmpty() || (isPending && progress != null && progress.grammarCompleted != true)) {
+                    val grammarError = progress?.stepErrors?.get(AnalysisStep.GRAMMAR_EXPLANATION.name)
+                        ?: data.moduleErrors?.get(AnalysisStep.GRAMMAR_EXPLANATION.name)
+                    val isGrammarLoading = data.grammarPoints.isNullOrEmpty() &&
+                        ((isPending && progress != null && progress.grammarCompleted != true) || isRegeneratingGrammar) &&
+                        grammarError == null
+                    run {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
@@ -944,108 +1038,138 @@ fun WorkspaceResultContent(
                             shadowElevation = 3.dp,
                             tonalElevation = 0.dp
                         ) {
-                            SelectionContainer {
-                                Column(modifier = Modifier.animateContentSize().padding(16.dp)) {
-                                    val grammarError = progress?.stepErrors?.get("GRAMMAR_EXPLANATION")
-                                    AnimatedContent(
-                                        targetState = data.grammarPoints.isNullOrEmpty() && isPending && grammarError == null,
-                                        label = "GrammarAnimation"
-                                    ) { isLoading ->
-                                        if (isLoading) {
-                                            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                                                repeat(2) {
-                                                    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                                            ShimmerSkeleton(modifier = Modifier.width(32.dp).height(18.dp))
-                                                            ShimmerSkeleton(modifier = Modifier.width(100.dp).height(18.dp))
-                                                        }
-                                                        ShimmerSkeleton(modifier = Modifier.fillMaxWidth().height(12.dp))
-                                                        ShimmerSkeleton(modifier = Modifier.fillMaxWidth(0.7f).height(12.dp))
+                            Column(modifier = Modifier.animateContentSize().padding(16.dp)) {
+                                AnimatedVisibility(
+                                    visible = isRegeneratingGrammar && !data.grammarPoints.isNullOrEmpty(),
+                                    enter = expandVertically() + fadeIn(),
+                                    exit = shrinkVertically() + fadeOut()
+                                ) {
+                                    LinearProgressIndicator(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 10.dp)
+                                            .height(3.dp)
+                                            .clip(RoundedCornerShape(2.dp)),
+                                        color = MatchaGreen,
+                                        trackColor = SumiInk.copy(alpha = 0.05f)
+                                    )
+                                }
+                                if (grammarError != null && !data.grammarPoints.isNullOrEmpty()) {
+                                    ModuleErrorBanner(
+                                        errorMessage = grammarError,
+                                        canRegenerate = canRegenerate,
+                                        isRegenerating = isRegeneratingGrammar,
+                                        onRegenerate = { onRegenerateModule(RegeneratableModule.GRAMMAR) },
+                                        modifier = Modifier.padding(bottom = 10.dp)
+                                    )
+                                }
+                                AnimatedContent(
+                                    targetState = isGrammarLoading,
+                                    label = "GrammarAnimation"
+                                ) { isLoading ->
+                                    if (isLoading) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                                            repeat(2) {
+                                                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                        ShimmerSkeleton(modifier = Modifier.width(32.dp).height(18.dp))
+                                                        ShimmerSkeleton(modifier = Modifier.width(100.dp).height(18.dp))
                                                     }
+                                                    ShimmerSkeleton(modifier = Modifier.fillMaxWidth().height(12.dp))
+                                                    ShimmerSkeleton(modifier = Modifier.fillMaxWidth(0.7f).height(12.dp))
                                                 }
                                             }
-                                        } else if (grammarError != null) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Warning,
-                                                    contentDescription = "Error",
-                                                    tint = Color.Red,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = grammarError,
-                                                    color = Color.Red,
-                                                    fontSize = 13.sp
-                                                )
-                                            }
-                                        } else {
-                                            Column {
-                                                data.grammarPoints?.forEachIndexed { idx, gp ->
-                                                    key("grammar_$idx") {
-                                                        val visibleState = remember(gp) { androidx.compose.animation.core.MutableTransitionState(!isPending) }.apply { targetState = true }
-                                                        AnimatedVisibility(
-                                                            visibleState = visibleState,
-                                                            enter = if (!isPending) androidx.compose.animation.EnterTransition.None else fadeIn() + slideInVertically(initialOffsetY = { 20 })
-                                                        ) {
-                                                            Column(modifier = Modifier.fillMaxWidth()) {
-                                                                Row(
-                                                                    verticalAlignment = Alignment.CenterVertically,
-                                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                                ) {
-                                                                     Surface(
-                                                                         color = if (ZenThemeColors.isDark()) Color(0xFF1E3D1E) else MatchaGreen,
-                                                                         shape = RoundedCornerShape(4.dp)
-                                                                     ) {
-                                                                         Text(
-                                                                             text = stringResource(R.string.grammar_label),
-                                                                             fontSize = 11.sp,
-                                                                             fontWeight = FontWeight.Bold,
-                                                                             color = if (ZenThemeColors.isDark()) Color.White else Color(0xFF1E1E1E),
-                                                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                                         )
-                                                                     }
-                                                                    Text(
-                                                                        text = gp.pattern ?: "",
-                                                                        fontSize = 15.sp,
-                                                                        fontWeight = FontWeight.Bold,
-                                                                        color = SumiInk,
-                                                                        modifier = Modifier.weight(1f)
-                                                                    )
-                                                                    val isGrammarBookmarked = uiState.bookmarkedGrammarPointPatterns.contains(gp.pattern ?: "")
-                                                                    IconButton(
-                                                                        onClick = {
-                                                                            if (gp.pattern != null) {
-                                                                                onToggleGrammarBookmark(gp.pattern, gp.explanation, uiState.selectedRecord?.originalText ?: "")
-                                                                            }
-                                                                        },
-                                                                        modifier = Modifier.size(32.dp)
-                                                                    ) {
-                                                                        Icon(
-                                                                            imageVector = if (isGrammarBookmarked) Icons.Default.Star else Icons.Default.StarBorder,
-                                                                            contentDescription = "Bookmark",
-                                                                            tint = if (isGrammarBookmarked) Color(0xFFD4A017) else SumiInk.copy(alpha = 0.4f),
-                                                                            modifier = Modifier.size(20.dp)
+                                        }
+                                    } else if (grammarError != null && data.grammarPoints.isNullOrEmpty()) {
+                                        ModuleErrorBanner(
+                                            errorMessage = grammarError,
+                                            canRegenerate = canRegenerate,
+                                            isRegenerating = isRegeneratingGrammar,
+                                            onRegenerate = { onRegenerateModule(RegeneratableModule.GRAMMAR) },
+                                            modifier = Modifier.padding(vertical = 4.dp)
+                                        )
+                                    } else if (data.grammarPoints.isNullOrEmpty()) {
+                                        Text(
+                                            text = stringResource(R.string.module_empty_placeholder),
+                                            fontSize = 13.sp,
+                                            color = SumiInk.copy(alpha = 0.45f)
+                                        )
+                                    } else {
+                                        val isGrammarStreaming = (isPending && progress?.grammarCompleted != true) || isRegeneratingGrammar
+                                        val grammarList = data.grammarPoints.orEmpty()
+                                        Column {
+                                            grammarList.forEachIndexed { idx, gp ->
+                                                key("grammar_$idx") {
+                                                    val visibleState = remember(gp) { androidx.compose.animation.core.MutableTransitionState(!isGrammarStreaming) }.apply { targetState = true }
+                                                    AnimatedVisibility(
+                                                        visibleState = visibleState,
+                                                        enter = if (!isGrammarStreaming) androidx.compose.animation.EnterTransition.None else fadeIn() + slideInVertically(initialOffsetY = { 20 })
+                                                    ) {
+                                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                            ) {
+                                                                 Surface(
+                                                                     color = if (ZenThemeColors.isDark()) Color(0xFF1E3D1E) else MatchaGreen,
+                                                                     shape = RoundedCornerShape(4.dp)
+                                                                 ) {
+                                                                     Text(
+                                                                         text = stringResource(R.string.grammar_label),
+                                                                         fontSize = 11.sp,
+                                                                         fontWeight = FontWeight.Bold,
+                                                                         color = if (ZenThemeColors.isDark()) Color.White else Color(0xFF1E1E1E),
+                                                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                     )
+                                                                 }
+                                                                val grammarPattern = gp.pattern.orEmpty()
+                                                                if (grammarPattern.isNotBlank()) {
+                                                                    SelectionContainer(modifier = Modifier.weight(1f)) {
+                                                                        Text(
+                                                                            text = grammarPattern,
+                                                                            fontSize = 15.sp,
+                                                                            fontWeight = FontWeight.Bold,
+                                                                            color = SumiInk
                                                                         )
                                                                     }
+                                                                } else {
+                                                                    Spacer(modifier = Modifier.weight(1f))
                                                                 }
-                                                                Spacer(modifier = Modifier.height(6.dp))
-                                                                StreamingText(
-                                                                    text = gp.explanation ?: "",
-                                                                    isStreaming = isPending,
-                                                                    fontSize = 13.sp,
-                                                                    color = SumiInk.copy(alpha = 0.8f),
-                                                                    lineHeight = 20.sp
-                                                                )
-                                                                if (idx < (data.grammarPoints?.size ?: 0) - 1) {
-                                                                    Divider(
-                                                                        modifier = Modifier.padding(vertical = 14.dp),
-                                                                        color = SumiInk.copy(alpha = 0.08f)
+                                                                val isGrammarBookmarked = uiState.bookmarkedGrammarPointPatterns.contains(gp.pattern ?: "")
+                                                                IconButton(
+                                                                    onClick = {
+                                                                        if (gp.pattern != null) {
+                                                                            onToggleGrammarBookmark(gp.pattern, gp.explanation, uiState.selectedRecord?.originalText ?: "")
+                                                                        }
+                                                                    },
+                                                                    modifier = Modifier.size(32.dp)
+                                                                ) {
+                                                                    Icon(
+                                                                        imageVector = if (isGrammarBookmarked) Icons.Default.Star else Icons.Default.StarBorder,
+                                                                        contentDescription = "Bookmark",
+                                                                        tint = if (isGrammarBookmarked) Color(0xFFD4A017) else SumiInk.copy(alpha = 0.4f),
+                                                                        modifier = Modifier.size(20.dp)
                                                                     )
                                                                 }
+                                                            }
+                                                            val grammarExplanation = gp.explanation.orEmpty()
+                                                            if (grammarExplanation.isNotBlank()) {
+                                                                Spacer(modifier = Modifier.height(6.dp))
+                                                                SelectionContainer {
+                                                                    StreamingText(
+                                                                        text = grammarExplanation,
+                                                                        isStreaming = isGrammarStreaming,
+                                                                        fontSize = 13.sp,
+                                                                        color = SumiInk.copy(alpha = 0.8f),
+                                                                        lineHeight = 20.sp
+                                                                    )
+                                                                }
+                                                            }
+                                                            if (idx < grammarList.size - 1) {
+                                                                Divider(
+                                                                    modifier = Modifier.padding(vertical = 14.dp),
+                                                                    color = SumiInk.copy(alpha = 0.08f)
+                                                                )
                                                             }
                                                         }
                                                     }
@@ -1204,32 +1328,32 @@ fun SegmentDetailContent(
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                SelectionContainer {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(R.string.meaning),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KuriAmber.copy(alpha = 1.0f)
+                        )
+                        IconButton(
+                            onClick = { onEditWordSegment(currentSegment) },
+                            modifier = Modifier.size(28.dp)
                         ) {
-                            Text(
-                                text = stringResource(R.string.meaning),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = KuriAmber.copy(alpha = 1.0f)
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = stringResource(R.string.edit),
+                                tint = sumiInk.copy(alpha = 0.45f),
+                                modifier = Modifier.size(18.dp)
                             )
-                            IconButton(
-                                onClick = { onEditWordSegment(currentSegment) },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = stringResource(R.string.edit),
-                                    tint = sumiInk.copy(alpha = 0.45f),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    SelectionContainer {
                         Text(
                             text = currentSegment.meaning,
                             fontSize = 14.sp,
@@ -1380,32 +1504,32 @@ fun CompactSegmentDetailCard(
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SelectionContainer {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = stringResource(R.string.meaning),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = KuriAmber.copy(alpha = 1.0f)
+                            )
+                            IconButton(
+                                onClick = { onEditWordSegment(currentSegment) },
+                                modifier = Modifier.size(24.dp)
                             ) {
-                                Text(
-                                    text = stringResource(R.string.meaning),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = KuriAmber.copy(alpha = 1.0f)
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = null,
+                                    tint = sumiInk.copy(alpha = 0.4f),
+                                    modifier = Modifier.size(14.dp)
                                 )
-                                IconButton(
-                                    onClick = { onEditWordSegment(currentSegment) },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Edit,
-                                        contentDescription = null,
-                                        tint = sumiInk.copy(alpha = 0.4f),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
                             }
-                            Spacer(modifier = Modifier.height(2.dp))
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        SelectionContainer {
                             Text(
                                 text = currentSegment.meaning,
                                 fontSize = 13.sp,

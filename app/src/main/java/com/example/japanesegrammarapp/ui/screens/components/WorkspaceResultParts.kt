@@ -36,11 +36,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.res.stringResource
+import com.example.japanesegrammarapp.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -307,4 +314,53 @@ private fun getChipColorForPos(segment: WordSegment): Color {
         derivePosCategory(segment.partOfSpeech)
     }
     return ZenThemeColors.getChipColor(resolvedCategory)
+}
+
+@Composable
+fun ModuleErrorBanner(
+    errorMessage: String,
+    canRegenerate: Boolean,
+    isRegenerating: Boolean,
+    onRegenerate: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val errorColor = MaterialTheme.colorScheme.error
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Icon(
+            imageVector = Icons.Default.Warning,
+            contentDescription = "Error",
+            tint = errorColor,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = errorMessage,
+            color = errorColor,
+            fontSize = 13.sp,
+            modifier = Modifier.weight(1f)
+        )
+        if (canRegenerate && !isRegenerating) {
+            Spacer(modifier = Modifier.width(8.dp))
+            TextButton(
+                onClick = onRegenerate,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = errorColor)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = stringResource(R.string.regenerate_module),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
 }

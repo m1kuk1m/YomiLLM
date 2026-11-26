@@ -35,7 +35,7 @@ fun StreamingText(
         return
     }
 
-    var displayedCount by remember { mutableIntStateOf(0) }
+    var displayedCount by remember { mutableIntStateOf(if (text.isNotEmpty()) 1 else 0) }
 
     LaunchedEffect(text) {
         val targetLength = text.length

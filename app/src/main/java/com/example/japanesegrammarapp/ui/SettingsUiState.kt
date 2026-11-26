@@ -22,6 +22,7 @@ data class SettingsUiState(
     val useBackupApi: Boolean = false,
     val autoRetryOnError: Boolean = false,
     val failoverToNextEndpoint: Boolean = false,
+    val streamingEnabled: Boolean = true,
     val decisionApiEnabled: Boolean = false,
     val decisionModel: String = com.example.japanesegrammarapp.domain.model.DecisionConfig.DEFAULT_MODEL,
     val decisionEndpoints: List<LlmEndpoint> = emptyList(),

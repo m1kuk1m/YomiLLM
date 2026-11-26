@@ -2,13 +2,19 @@ package com.example.japanesegrammarapp.domain.usecase
 
 import com.example.japanesegrammarapp.domain.model.AnalysisDomainRecord
 import com.example.japanesegrammarapp.domain.model.AnalysisStatus
+import com.example.japanesegrammarapp.domain.model.AnalysisStep
 import com.example.japanesegrammarapp.domain.model.DailyTokenUsage
 import com.example.japanesegrammarapp.domain.model.DetailedAnalysisResult
+import com.example.japanesegrammarapp.domain.model.DetailedGrammarPoint
 import com.example.japanesegrammarapp.domain.model.LlmConfig
 import com.example.japanesegrammarapp.domain.model.LlmEndpoint
 import com.example.japanesegrammarapp.domain.model.ModelTokenUsage
 import com.example.japanesegrammarapp.domain.model.OcrBoxDetectionSettings
+import com.example.japanesegrammarapp.domain.model.RegeneratableModule
+import com.example.japanesegrammarapp.domain.model.SentenceClause
 import com.example.japanesegrammarapp.domain.model.TokenizationResult
+import com.example.japanesegrammarapp.domain.model.WordSegment
+import com.google.gson.Gson
 import com.example.japanesegrammarapp.domain.repository.DetailedResultSerializer
 import com.example.japanesegrammarapp.domain.repository.HistoryRepository
 import com.example.japanesegrammarapp.domain.repository.ImageAttachmentLoader
@@ -375,6 +381,208 @@ class AnalysisTaskManagerTest {
         assertEquals(false, llm.lastDecoupledPosMode)
     }
 
+    @Test
+    fun fullAnalysisPersistsModuleErrorWhenTranslationFails() = runBlocking {
+        val history = FakeHistoryRepository()
+        val serializer = FakeDetailedResultSerializer()
+        val llm = FakeLlmAnalysisService(
+            failTranslation = true,
+            clausesResult = listOf(SentenceClause(1, "主語", "猫が", "主語を示す")),
+            grammarResult = listOf(DetailedGrammarPoint("〜が", "主格助詞"))
+        )
+        val manager = newManager(history = history, llm = llm, serializer = serializer)
+
+        val id = manager.execute(
+            text = "猫が走る",
+            imageUri = null,
+            provider = "Gemini",
+            modelName = "gemini-test",
+            baseUrl = "https://example.test",
+            apiKey = "key"
+        )
+
+        waitUntil { history.getRecordById(id)?.status == AnalysisStatus.COMPLETED }
+        val stored = checkNotNull(serializer.fromJson(history.getRecordById(id)?.analysisResult))
+
+        assertEquals(null, stored.translation)
+        assertTrue(stored.moduleErrors?.get(AnalysisStep.TRANSLATION.name).orEmpty().contains("translation failed"))
+        assertEquals(1, stored.clauses?.size)
+        assertEquals(1, stored.grammarPoints?.size)
+    }
+
+    @Test
+    fun regenerateModuleTranslationOnlyUpdatesTranslationClearsErrorAndAddsTokens() = runBlocking {
+        val serializer = FakeDetailedResultSerializer()
+        val initialDetail = DetailedAnalysisResult(
+            translation = null,
+            segments = listOf(WordSegment(text = "猫", reading = "ねこ", meaning = "猫")),
+            clauses = listOf(SentenceClause(1, "主語", "猫", "主語")),
+            grammarPoints = listOf(DetailedGrammarPoint("猫", "名詞")),
+            moduleErrors = mapOf(AnalysisStep.TRANSLATION.name to "Gemini API Blocked"),
+            consumedTokens = 10,
+            inputTokens = 6,
+            outputTokens = 4
+        )
+        val history = FakeHistoryRepository(
+            AnalysisDomainRecord(
+                id = 7,
+                originalText = "猫が走る",
+                analysisResult = serializer.toJson(initialDetail),
+                modelUsed = "Gemini: gemini-test",
+                status = AnalysisStatus.COMPLETED,
+                consumedTokens = 10,
+                inputTokens = 6,
+                outputTokens = 4
+            )
+        )
+        val llm = FakeLlmAnalysisService(
+            translationResult = "猫在跑",
+            tokenMeta = LlmResultMetadata(consumedTokens = 5, inputTokens = 3, outputTokens = 2)
+        )
+        val manager = newManager(history = history, llm = llm, serializer = serializer)
+
+        manager.regenerateModule(7, RegeneratableModule.TRANSLATION)
+        waitUntil { manager.regeneratingModulesFlow.value[7].isNullOrEmpty() && llm.translationCalls == 1 }
+
+        val updatedRecord = checkNotNull(history.getRecordById(7))
+        val updatedDetail = checkNotNull(serializer.fromJson(updatedRecord.analysisResult))
+
+        assertEquals(AnalysisStatus.COMPLETED, updatedRecord.status)
+        assertEquals(1, llm.translationCalls)
+        assertEquals(0, llm.tokenizerCalls)
+        assertEquals(0, llm.clausesCalls)
+        assertEquals(0, llm.grammarCalls)
+        assertEquals(0, llm.segmentsCalls)
+        assertEquals("猫在跑", updatedDetail.translation)
+        assertEquals(null, updatedDetail.moduleErrors)
+        assertEquals("猫", updatedDetail.segments?.single()?.text)
+        assertEquals(1, updatedDetail.clauses?.size)
+        assertEquals(1, updatedDetail.grammarPoints?.size)
+        assertEquals(15, updatedRecord.consumedTokens)
+        assertEquals(9, updatedRecord.inputTokens)
+        assertEquals(6, updatedRecord.outputTokens)
+    }
+
+    @Test
+    fun regenerateModuleConcurrentTranslationAndGrammarDoNotOverwriteEachOther() = runBlocking {
+        val serializer = FakeDetailedResultSerializer()
+        val initialDetail = DetailedAnalysisResult(
+            translation = "旧翻译",
+            segments = listOf(WordSegment(text = "雨", reading = "あめ", meaning = "雨")),
+            clauses = listOf(SentenceClause(1, "主語", "雨", "主語")),
+            grammarPoints = emptyList(),
+            moduleErrors = mapOf(
+                AnalysisStep.TRANSLATION.name to "err1",
+                AnalysisStep.GRAMMAR_EXPLANATION.name to "err2"
+            ),
+            consumedTokens = 10,
+            inputTokens = 5,
+            outputTokens = 5
+        )
+        val history = FakeHistoryRepository(
+            AnalysisDomainRecord(
+                id = 8,
+                originalText = "雨が降る",
+                analysisResult = serializer.toJson(initialDetail),
+                modelUsed = "Gemini: gemini-test",
+                status = AnalysisStatus.COMPLETED,
+                consumedTokens = 10,
+                inputTokens = 5,
+                outputTokens = 5
+            )
+        )
+        val llm = FakeLlmAnalysisService(
+            delayMs = 40,
+            translationResult = "下雨了",
+            grammarResult = listOf(DetailedGrammarPoint("雨が降る", "下雨表达")),
+            tokenMeta = LlmResultMetadata(consumedTokens = 4, inputTokens = 2, outputTokens = 2)
+        )
+        val manager = newManager(history = history, llm = llm, serializer = serializer)
+
+        manager.regenerateModule(8, RegeneratableModule.TRANSLATION)
+        manager.regenerateModule(8, RegeneratableModule.GRAMMAR)
+
+        waitUntil {
+            llm.translationCalls == 1 &&
+                llm.grammarCalls == 1 &&
+                manager.regeneratingModulesFlow.value[8].isNullOrEmpty()
+        }
+
+        val updatedRecord = checkNotNull(history.getRecordById(8))
+        val updatedDetail = checkNotNull(serializer.fromJson(updatedRecord.analysisResult))
+
+        assertEquals("下雨了", updatedDetail.translation)
+        assertEquals("雨が降る", updatedDetail.grammarPoints?.single()?.pattern)
+        assertEquals(null, updatedDetail.moduleErrors)
+        assertEquals(18, updatedRecord.consumedTokens)
+    }
+
+    @Test
+    fun regenerateModuleFailurePreservesExistingContentAndPersistsError() = runBlocking {
+        val serializer = FakeDetailedResultSerializer()
+        val initialDetail = DetailedAnalysisResult(
+            translation = "保留的旧翻译",
+            segments = listOf(WordSegment(text = "空", reading = "そら", meaning = "天空"))
+        )
+        val history = FakeHistoryRepository(
+            AnalysisDomainRecord(
+                id = 9,
+                originalText = "空が青い",
+                analysisResult = serializer.toJson(initialDetail),
+                modelUsed = "Gemini: gemini-test",
+                status = AnalysisStatus.COMPLETED
+            )
+        )
+        val llm = FakeLlmAnalysisService(failTranslation = true)
+        val manager = newManager(history = history, llm = llm, serializer = serializer)
+
+        manager.regenerateModule(9, RegeneratableModule.TRANSLATION)
+        waitUntil { llm.translationCalls == 1 && manager.regeneratingModulesFlow.value[9].isNullOrEmpty() }
+
+        val updatedDetail = checkNotNull(serializer.fromJson(history.getRecordById(9)?.analysisResult))
+        assertEquals("保留的旧翻译", updatedDetail.translation)
+        assertTrue(updatedDetail.moduleErrors?.get(AnalysisStep.TRANSLATION.name).orEmpty().contains("translation failed"))
+    }
+
+    @Test
+    fun regenerateModuleSegmentsOnlyReusesTokensWhileFullVocabularyRetokenizes() = runBlocking {
+        val serializer = FakeDetailedResultSerializer()
+        val initialDetail = DetailedAnalysisResult(
+            translation = "猫在跑",
+            segments = listOf(WordSegment(text = "猫"), WordSegment(text = "が"), WordSegment(text = "走る"))
+        )
+        val history = FakeHistoryRepository(
+            AnalysisDomainRecord(
+                id = 10,
+                originalText = "猫が走る",
+                analysisResult = serializer.toJson(initialDetail),
+                modelUsed = "Gemini: gemini-test",
+                status = AnalysisStatus.COMPLETED
+            )
+        )
+        val llm = FakeLlmAnalysisService(
+            segmentsResult = listOf(
+                WordSegment(text = "猫", reading = "ねこ", meaning = "猫"),
+                WordSegment(text = "が", reading = "が", meaning = "主格"),
+                WordSegment(text = "走る", reading = "はしる", meaning = "跑")
+            )
+        )
+        val manager = newManager(history = history, llm = llm, serializer = serializer)
+
+        manager.regenerateModule(10, RegeneratableModule.SEGMENTS_ONLY)
+        waitUntil { llm.segmentsCalls == 1 && manager.regeneratingModulesFlow.value[10].isNullOrEmpty() }
+
+        assertEquals(0, llm.tokenizerCalls)
+        assertEquals(listOf("猫", "が", "走る"), llm.lastSegmentsTokens)
+        val afterSegmentsOnly = checkNotNull(serializer.fromJson(history.getRecordById(10)?.analysisResult))
+        assertEquals("ねこ", afterSegmentsOnly.segments?.first()?.reading)
+
+        manager.regenerateModule(10, RegeneratableModule.TOKENIZATION_AND_SEGMENTS)
+        waitUntil { llm.tokenizerCalls == 1 && llm.segmentsCalls == 2 && manager.regeneratingModulesFlow.value[10].isNullOrEmpty() }
+        assertEquals(1, llm.tokenizerCalls)
+        assertEquals(2, llm.segmentsCalls)
+    }
+
     private fun newManager(
         history: FakeHistoryRepository,
         llm: FakeLlmAnalysisService = FakeLlmAnalysisService(),
@@ -455,13 +663,22 @@ private class FakeImageTextExtractor(
 private class FakeLlmAnalysisService(
     private val delayMs: Long = 0,
     private val failTranslation: Boolean = false,
+    private val translationResult: String = "translated",
+    private val clausesResult: List<SentenceClause> = emptyList(),
+    private val grammarResult: List<DetailedGrammarPoint> = emptyList(),
     private val segmentsResult: List<com.example.japanesegrammarapp.domain.model.WordSegment> = emptyList(),
-    private val segmentDelayMs: Long = 0
+    private val segmentDelayMs: Long = 0,
+    private val tokenMeta: LlmResultMetadata = LlmResultMetadata(consumedTokens = 1, inputTokens = 1, outputTokens = 0)
 ) : LlmAnalysisService {
     var tokenizerCalls = 0
+    var translationCalls = 0
+    var clausesCalls = 0
+    var grammarCalls = 0
+    var segmentsCalls = 0
     var lastTokenizerText: String? = null
     var lastTokenizerImageBase64: String? = null
     var lastDecoupledPosMode: Boolean? = null
+    var lastSegmentsTokens: List<String> = emptyList()
 
     override suspend fun executeTokenizer(
         text: String,
@@ -494,9 +711,10 @@ private class FakeLlmAnalysisService(
         recordId: Int?,
         stepName: String?
     ): kotlinx.coroutines.flow.Flow<Pair<DetailedAnalysisResult?, LlmResultMetadata>> = kotlinx.coroutines.flow.flow {
+        translationCalls++
         if (failTranslation) error("translation failed")
         if (delayMs > 0) delay(delayMs)
-        emit(DetailedAnalysisResult(translation = "translated") to metadata())
+        emit(DetailedAnalysisResult(translation = translationResult) to metadata())
     }
 
     override suspend fun executeClauses(
@@ -510,8 +728,9 @@ private class FakeLlmAnalysisService(
         recordId: Int?,
         stepName: String?
     ): kotlinx.coroutines.flow.Flow<Pair<DetailedAnalysisResult?, LlmResultMetadata>> = kotlinx.coroutines.flow.flow {
+        clausesCalls++
         if (delayMs > 0) delay(delayMs)
-        emit(DetailedAnalysisResult() to metadata())
+        emit(DetailedAnalysisResult(clauses = clausesResult) to metadata())
     }
 
     override suspend fun executeGrammar(
@@ -525,8 +744,9 @@ private class FakeLlmAnalysisService(
         recordId: Int?,
         stepName: String?
     ): kotlinx.coroutines.flow.Flow<Pair<DetailedAnalysisResult?, LlmResultMetadata>> = kotlinx.coroutines.flow.flow {
+        grammarCalls++
         if (delayMs > 0) delay(delayMs)
-        emit(DetailedAnalysisResult() to metadata())
+        emit(DetailedAnalysisResult(grammarPoints = grammarResult) to metadata())
     }
 
     override suspend fun executeSegments(
@@ -542,13 +762,15 @@ private class FakeLlmAnalysisService(
         stepName: String?,
         decoupledPosMode: Boolean
     ): kotlinx.coroutines.flow.Flow<Pair<DetailedAnalysisResult?, LlmResultMetadata>> = kotlinx.coroutines.flow.flow {
+        segmentsCalls++
+        lastSegmentsTokens = tokens
         lastDecoupledPosMode = decoupledPosMode
         val effectiveDelay = if (segmentDelayMs > 0) segmentDelayMs else delayMs
         if (effectiveDelay > 0) delay(effectiveDelay)
         emit(DetailedAnalysisResult(segments = segmentsResult) to metadata())
     }
 
-    private fun metadata() = LlmResultMetadata(consumedTokens = 1, inputTokens = 1, outputTokens = 0)
+    private fun metadata() = tokenMeta
 }
 
 private class FakeDecisionRepository(
@@ -615,6 +837,8 @@ private class FakeSettingsRepository(
     override fun setAutoRetryOnError(value: Boolean) = Unit
     override fun getFailoverToNextEndpoint(): Boolean = false
     override fun setFailoverToNextEndpoint(value: Boolean) = Unit
+    override fun getStreamingEnabled(): Boolean = true
+    override fun setStreamingEnabled(value: Boolean) = Unit
 
     override fun getAllProviders(): List<String> = LlmConfig.providers
     override fun getBaseProviderType(providerId: String): String = providerId
@@ -810,14 +1034,18 @@ private class FakeHistoryRepository(vararg initialRecords: AnalysisDomainRecord)
 }
 
 private class FakeDetailedResultSerializer : DetailedResultSerializer {
+    private val gson = Gson()
     var lastSerialized: DetailedAnalysisResult? = null
 
     override fun toJson(result: DetailedAnalysisResult): String {
         lastSerialized = result
-        return "translation=${result.translation};tokens=${result.consumedTokens}/${result.inputTokens}/${result.outputTokens}"
+        return gson.toJson(result)
     }
 
-    override fun fromJson(json: String?): DetailedAnalysisResult? = null
+    override fun fromJson(json: String?): DetailedAnalysisResult? {
+        if (json.isNullOrBlank()) return null
+        return gson.fromJson(json, DetailedAnalysisResult::class.java)
+    }
 }
 
 private class FakeOcrRepository : OcrRepository {

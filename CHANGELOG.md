@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-11-26
+
+### Added
+- Unified per-module regeneration workflow:
+  - Added `RegeneratableModule` support in `AnalysisTaskManager` and `WorkspaceViewModel` allowing concurrent regeneration of non-conflicting modules (`TOKENIZATION_AND_SEGMENTS` / `SEGMENTS_ONLY`, `TRANSLATION`, `CLAUSES`, `GRAMMAR`).
+  - Added Zen-styled `RegenerateAnalysisBottomSheet` triggered from the Workspace top bar refresh icon, consolidating full re-analysis and individual module regeneration (including previously hidden word-meaning/POS-only re-analysis) with live in-progress and error badges.
+  - Added inline `ModuleErrorBanner` retry controls inside result cards when a specific module fails.
+- Streaming response toggle:
+  - Added `streaming_enabled` setting in Settings API configuration to switch between real-time streaming and full-response requests (supported for Gemini & Vertex AI).
+- Decoupled POS tagging, endpoint pool health tracking, and prompt management improvements:
+  - Added Decision API POS tagging pipeline, `InMemoryEndpointHealthTracker` / `LlmEndpointPoolResolver`, dedicated `ImageTextExtractor`, and `ExternalTextIntakeUseCase`.
+  - Added `LlmResponseSanitizer` for streaming-safe `<think>` / code-fence / `<output>` stripping and katakana-to-hiragana reading normalization.
+  - Added Built-in Default / Customized status badge in `SettingsPromptEditor`.
+
+### Changed
+- Rewrote all 8 built-in system prompts in `PromptManager` with structured XML positive-goal formatting and isolated user inputs with `<input_text>` / `<tokens>` delimiters.
+- Added Gemini 3/4+ and OpenAI GPT-5/o4 `reasoning_effort` and temperature compatibility in `LlmConfig` and `LlmRepositoryImpl`.
+- Polished the target sentence TTS play/stop button in `WorkspaceResult` with rounded icons and a subtle circular background pill.
+- Upgraded `androidx.compose:compose-bom` from `2024.02.00` to `2024.06.00` (`compose-foundation 1.6.8`).
+
+### Fixed
+- Fixed text selection handle cross-drag crash (`IllegalStateException: unexpectedly miss-crossed selection` / Compose `b/439758956`):
+  - Scoped every `SelectionContainer` in `WorkspaceResult` (Translation, Clauses, Grammar Points, Word Detail / Popup Meaning) and `ApiLogDialogs` strictly to a single non-empty text node so Compose uses `SingleSelectionLayout` instead of `MultiSelectionLayout`.
+  - Guarded `StreamingText` initial streaming frame against rendering an empty string inside a `SelectionContainer`.
+- Fixed sticky edge snapping for camera text selection handles (`CameraCropReviewLayout` / `TextSelectionMath`).
+
 ## [1.11.0] - 2026-10-16
 
 ### Added

@@ -38,14 +38,42 @@ object LlmConfig {
         "gemini-1.5-pro"
     )
 
+    private val GEMINI_MAJOR_VERSION_REGEX = Regex("""gemini-(\d+)(?:\.(\d+))?""")
+    private val OPENAI_REASONING_MODEL_REGEX = Regex("""(^|[/:\-])(o[134]($|[-._])|gpt-5($|[-._]))""")
+    private val GPT5_MODEL_REGEX = Regex("""(^|[/:\-])gpt-5($|[-._])""")
+
+    fun isGemini3OrLater(modelName: String): Boolean {
+        val clean = modelName.removePrefix("models/").lowercase()
+        val major = GEMINI_MAJOR_VERSION_REGEX.find(clean)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        return major != null && major >= 3
+    }
+
     fun isGeminiReasoningModel(modelName: String): Boolean {
         val clean = modelName.removePrefix("models/").lowercase()
         if (clean.contains("gemini-1.5")) return false
-        return clean.contains("gemini-2.5") || clean.contains("gemini-3") || clean.contains("flash-lite")
+        return isGemini3OrLater(clean) || clean.contains("gemini-2.5") || clean.contains("flash-lite")
     }
 
-    fun isGemini3Model(modelName: String): Boolean {
-        val clean = modelName.removePrefix("models/").lowercase()
-        return clean.contains("gemini-3")
+    fun isGemini3Model(modelName: String): Boolean = isGemini3OrLater(modelName)
+
+    fun resolveGeminiTemperature(modelName: String): Double? =
+        if (isGemini3OrLater(modelName)) null else 0.1
+
+    fun isOpenAiReasoningModel(modelName: String): Boolean =
+        OPENAI_REASONING_MODEL_REGEX.containsMatchIn(modelName.trim().lowercase())
+
+    fun resolveOpenAiTemperature(modelName: String): Double? =
+        if (isOpenAiReasoningModel(modelName)) null else 0.1
+
+    fun resolveOpenAiReasoningEffort(modelName: String, level: ReasoningLevel): String? {
+        if (!isOpenAiReasoningModel(modelName)) return null
+        val isGpt5 = GPT5_MODEL_REGEX.containsMatchIn(modelName.trim().lowercase())
+        return when (level) {
+            ReasoningLevel.AUTO -> null
+            ReasoningLevel.OFF -> if (isGpt5) "minimal" else null
+            ReasoningLevel.LOW -> "low"
+            ReasoningLevel.MEDIUM -> "medium"
+            ReasoningLevel.HIGH -> "high"
+        }
     }
 }

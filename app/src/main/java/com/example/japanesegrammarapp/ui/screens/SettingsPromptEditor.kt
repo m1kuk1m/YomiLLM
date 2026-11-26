@@ -179,11 +179,16 @@ fun SettingsPromptEditor(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
+                val activePreset = promptPresets.find { it.id == activePromptPresetId } ?: promptPresets.firstOrNull()
+                val customizedKeys = activePreset?.prompts?.keys.orEmpty()
+
                 PromptTypeSelector(
                     selectedPromptKey = selectedPromptKey,
+                    customizedKeys = customizedKeys,
                     onPromptKeyChange = onPromptKeyChange,
                     sumiInk = sumiInk,
-                    surfaceColor = surfaceColor
+                    surfaceColor = surfaceColor,
+                    primaryColor = primaryColor
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -307,20 +312,36 @@ fun SettingsPromptEditor(
 @Composable
 private fun PromptTypeSelector(
     selectedPromptKey: String,
+    customizedKeys: Set<String>,
     onPromptKeyChange: (String) -> Unit,
     sumiInk: Color,
-    surfaceColor: Color
+    surfaceColor: Color,
+    primaryColor: Color
 ) {
     var dropdownExpanded by remember { mutableStateOf(false) }
-    val promptKeys = com.example.japanesegrammarapp.domain.model.AnalysisModule.entries.map { it.promptKey to it.displayNameRes() }
+    val promptKeys = com.example.japanesegrammarapp.domain.model.AnalysisModule.entries.map {
+        it.promptKey to it.displayNameRes()
+    } + ("prompt_segments_decoupled" to com.example.japanesegrammarapp.R.string.module_segments_decoupled)
     val selectedLabelRes = promptKeys.find { it.first == selectedPromptKey }?.second ?: R.string.overall_translation
+    val isCurrentCustomized = selectedPromptKey in customizedKeys
 
-    Text(
-        text = stringResource(R.string.prompt_select_type),
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Bold,
-        color = sumiInk.copy(alpha = 0.5f)
-    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = stringResource(R.string.prompt_select_type),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = sumiInk.copy(alpha = 0.5f)
+        )
+        PromptSourceBadge(
+            isCustomized = isCurrentCustomized,
+            primaryColor = primaryColor,
+            sumiInk = sumiInk
+        )
+    }
     Spacer(modifier = Modifier.height(4.dp))
     Box(
         modifier = Modifier
@@ -344,8 +365,25 @@ private fun PromptTypeSelector(
             modifier = Modifier.fillMaxWidth(0.9f)
         ) {
             promptKeys.forEach { (key, labelRes) ->
+                val isKeyCustomized = key in customizedKeys
                 DropdownMenuItem(
-                    text = { Text(stringResource(labelRes)) },
+                    text = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(text = stringResource(labelRes))
+                            if (isKeyCustomized) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                PromptSourceBadge(
+                                    isCustomized = true,
+                                    primaryColor = primaryColor,
+                                    sumiInk = sumiInk
+                                )
+                            }
+                        }
+                    },
                     onClick = {
                         onPromptKeyChange(key)
                         dropdownExpanded = false
@@ -353,6 +391,29 @@ private fun PromptTypeSelector(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PromptSourceBadge(
+    isCustomized: Boolean,
+    primaryColor: Color,
+    sumiInk: Color
+) {
+    val bgColor = if (isCustomized) primaryColor.copy(alpha = 0.14f) else sumiInk.copy(alpha = 0.08f)
+    val textColor = if (isCustomized) primaryColor else sumiInk.copy(alpha = 0.65f)
+    val labelRes = if (isCustomized) R.string.prompt_status_customized else R.string.prompt_status_default
+    Box(
+        modifier = Modifier
+            .background(bgColor, RoundedCornerShape(999.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = stringResource(labelRes),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = textColor
+        )
     }
 }
 

@@ -502,6 +502,7 @@ fun SettingsCredentialsSection(
                         EndpointPoolSection(
                             endpoints = endpoints,
                             endpointHasKeys = uiState.endpointHasKeys,
+                            endpointHealthStates = uiState.endpointHealthStates,
                             fetchingEndpointId = uiState.fetchingEndpointId,
                             onAddEndpoint = { onAddEndpoint(provider) },
                             onEditEndpoint = onEditEndpoint,
@@ -549,6 +550,126 @@ fun SettingsCredentialsSection(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsDecisionApiSection(
+    uiState: SettingsUiState,
+    onDecisionApiEnabledChange: (Boolean) -> Unit,
+    onDecisionModelSave: (String) -> Unit,
+    onAddEndpoint: () -> Unit,
+    onEditEndpoint: (LlmEndpoint) -> Unit,
+    onToggleEndpoint: (LlmEndpoint, Boolean) -> Unit,
+    onDeleteEndpoint: (LlmEndpoint) -> Unit
+) {
+    val defaultModel = com.example.japanesegrammarapp.domain.model.DecisionConfig.DEFAULT_MODEL
+    val modelDraftState = remember(uiState.decisionModel) { mutableStateOf(uiState.decisionModel) }
+    val trimmedDraft = modelDraftState.value.trim().ifBlank { defaultModel }
+    val hasUsableEndpoint = uiState.decisionEndpoints.any {
+        it.enabled && (uiState.endpointHasKeys[it.id] == true)
+    }
+
+    SettingsGroup(title = stringResource(R.string.settings_llm_group_decision)) {
+        SettingsItem(
+            icon = Icons.Default.Tune,
+            title = stringResource(R.string.decision_api_enable),
+            subtitle = stringResource(R.string.decision_api_enable_desc),
+            onClick = { onDecisionApiEnabledChange(!uiState.decisionApiEnabled) },
+            trailingContent = {
+                Switch(
+                    checked = uiState.decisionApiEnabled,
+                    onCheckedChange = onDecisionApiEnabledChange,
+                    colors = SettingsSwitchColors()
+                )
+            }
+        )
+
+        AnimatedVisibility(visible = uiState.decisionApiEnabled) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                SettingsDivider()
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.decision_api_model),
+                        fontSize = 14.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = modelDraftState.value,
+                            onValueChange = { modelDraftState.value = it },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            placeholder = { Text(stringResource(R.string.decision_api_model_hint)) }
+                        )
+                        Button(
+                            onClick = { onDecisionModelSave(trimmedDraft) },
+                            enabled = trimmedDraft != uiState.decisionModel
+                        ) {
+                            Text(stringResource(R.string.decision_api_save_model))
+                        }
+                        if (uiState.decisionModel != defaultModel || modelDraftState.value.trim() != defaultModel) {
+                            OutlinedButton(
+                                onClick = {
+                                    modelDraftState.value = defaultModel
+                                    onDecisionModelSave(defaultModel)
+                                }
+                            ) {
+                                Text(stringResource(R.string.decision_api_reset_model))
+                            }
+                        }
+                    }
+
+                    if (!hasUsableEndpoint) {
+                        androidx.compose.material3.Surface(
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = stringResource(R.string.decision_api_missing_endpoint_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = stringResource(R.string.decision_api_endpoint_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                SettingsDivider()
+
+                Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    EndpointPoolSection(
+                        endpoints = uiState.decisionEndpoints,
+                        endpointHasKeys = uiState.endpointHasKeys,
+                        endpointHealthStates = uiState.endpointHealthStates,
+                        fetchingEndpointId = null,
+                        onAddEndpoint = onAddEndpoint,
+                        onEditEndpoint = onEditEndpoint,
+                        onToggleEndpoint = onToggleEndpoint,
+                        onDeleteEndpoint = onDeleteEndpoint,
+                        onFetchModels = null
+                    )
                 }
             }
         }

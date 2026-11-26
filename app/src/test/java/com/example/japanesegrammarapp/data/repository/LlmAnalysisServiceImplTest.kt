@@ -232,9 +232,13 @@ class LlmAnalysisServiceImplTest {
     }
 
     @Test
-    fun executeImageOcrReturnsRecognizedTextAndTrimsProperly() = runBlocking {
+    fun executeSegmentsDecoupledPosModeParses7FieldsWithoutPos() = runBlocking {
         val repository = FakeLlmRepository(
-            response = "  これは画像テストです。 \n\n"
+            response = """
+                猫|ねこ|猫|猫|ねこ|原型|主语中心词
+                が|が|主格助词||||格助词，标记主语
+                走る|はしる|跑|走る|はしる|終止形|谓语动词
+            """.trimIndent()
         )
         val service = LlmAnalysisServiceImpl(
             llmRepository = repository,
@@ -242,14 +246,27 @@ class LlmAnalysisServiceImplTest {
             gson = Gson()
         )
 
-        val (result, _) = service.executeImageOcr(
-            imageBase64 = "base64image",
-            mimeType = "image/png",
+        val (result, _) = service.executeSegments(
+            text = "猫が走る",
+            tokens = listOf("猫", "が", "走る"),
+            imageBase64 = null,
+            mimeType = null,
             primaryConfigs = listOf(testConfig),
-            backupConfigs = emptyList()
+            backupConfigs = emptyList(),
+            decoupledPosMode = true
         ).last()
 
-        assertEquals("これは画像テストです。", result)
+        val segments = result?.segments.orEmpty()
+        assertEquals(3, segments.size)
+        org.junit.Assert.assertNull(segments[0].partOfSpeech)
+        assertEquals("ねこ", segments[0].reading)
+        assertEquals("猫", segments[0].meaning)
+        assertEquals("猫", segments[0].dictionaryForm)
+        assertEquals("ねこ", segments[0].dictionaryFormReading)
+        assertEquals("原型", segments[0].inflection)
+        assertEquals("主语中心词", segments[0].role)
+        assertEquals("格助词，标记主语", segments[1].role)
+        assertEquals("終止形", segments[2].inflection)
     }
 
     @Test
@@ -361,6 +378,43 @@ class LlmAnalysisServiceImplTest {
         assertEquals("わらった", segments[2].reading)
     }
 
+    @Test
+    fun executeSegmentsStripsOutputWrapperAndNormalizesKatakanaReadingsAndIsolatesInputWithXml() = runBlocking {
+        val repository = FakeLlmRepository(
+            response = """
+                ```text
+                <output>
+                アニメ|アニメ|动画|名詞||||対象。
+                を|を|把／将|格助詞||||目的語。
+                観る|ミル|看|一段動詞|観る|ミル|終止形|述語。
+                </output>
+                ```
+            """.trimIndent()
+        )
+        val service = LlmAnalysisServiceImpl(
+            llmRepository = repository,
+            settingsRepository = FakeSettingsRepository,
+            gson = Gson()
+        )
+
+        val (result, _) = service.executeSegments(
+            text = "\"アニメ\"を観る",
+            tokens = listOf("アニメ", "を", "観る"),
+            imageBase64 = null,
+            mimeType = null,
+            primaryConfigs = listOf(testConfig),
+            backupConfigs = emptyList()
+        ).last()
+
+        assertTrue(repository.lastUserPrompt.contains("<input_text>\n\"アニメ\"を観る\n</input_text>"))
+        assertTrue(repository.lastUserPrompt.contains("<tokens>\nアニメ, を, 観る\n</tokens>"))
+        val segments = result?.segments.orEmpty()
+        assertEquals(3, segments.size)
+        assertEquals("あにめ", segments[0].reading)
+        assertEquals("みる", segments[2].reading)
+        assertEquals("みる", segments[2].dictionaryFormReading)
+    }
+
     private companion object {
         val testConfig = LlmApiConfig(
             provider = "Gemini",
@@ -464,12 +518,6 @@ private object FakeSettingsRepository : SettingsRepository {
     override fun getApiKeyForEndpoint(endpointId: String): String = "key"
     override fun saveEndpoint(endpoint: LlmEndpoint, apiKey: String?): Boolean = true
     override fun deleteEndpoint(provider: String, endpointId: String): Boolean = true
-    override fun markEndpointSuccess(provider: String, endpointId: String) = Unit
-    override fun markEndpointFailure(provider: String, endpointId: String, error: String, cooldownMs: Long) = Unit
-    override fun touchEndpoint(provider: String, endpointId: String) = Unit
-    override fun buildLlmApiConfigs(provider: String, modelName: String): List<LlmApiConfig> = listOf(
-        LlmApiConfig(provider, provider, modelName, "https://example.test", "key")
-    )
     override fun getActiveProvider(): String = "Gemini"
     override fun setActiveProvider(provider: String) = Unit
     override fun getActiveModel(provider: String): String = "gemini-test"
@@ -551,5 +599,10 @@ private object FakeSettingsRepository : SettingsRepository {
     override fun getDeckSyncAuthToken(): String = ""
     override fun setDeckSyncAuthToken(token: String) = Unit
     override val deckSyncSettingsFlow = MutableStateFlow(com.example.japanesegrammarapp.domain.model.DeckSyncSettings())
+
+    override fun getDecisionApiEnabled(): Boolean = false
+    override fun setDecisionApiEnabled(value: Boolean) = Unit
+    override fun getDecisionModel(): String = com.example.japanesegrammarapp.domain.model.DecisionConfig.DEFAULT_MODEL
+    override fun setDecisionModel(model: String) = Unit
 }
 

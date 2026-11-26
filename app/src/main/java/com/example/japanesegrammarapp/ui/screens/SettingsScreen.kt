@@ -805,6 +805,22 @@ fun SettingsScreen(
                                     onFailoverToNextEndpointChange = viewModel::setFailoverToNextEndpoint
                                 )
 
+                                SettingsDecisionApiSection(
+                                    uiState = uiState,
+                                    onDecisionApiEnabledChange = viewModel::setDecisionApiEnabled,
+                                    onDecisionModelSave = viewModel::setDecisionModel,
+                                    onAddEndpoint = { endpointAddProvider = com.example.japanesegrammarapp.domain.model.DecisionConfig.PROVIDER_ID },
+                                    onEditEndpoint = { endpointBeingEdited = it },
+                                    onToggleEndpoint = { ep, enabled ->
+                                        viewModel.toggleEndpoint(
+                                            com.example.japanesegrammarapp.domain.model.DecisionConfig.PROVIDER_ID,
+                                            ep.id,
+                                            enabled
+                                        )
+                                    },
+                                    onDeleteEndpoint = { endpointDeleteTarget = it }
+                                )
+
                                 val activePresetName = uiState.promptPresets
                                     .find { it.id == uiState.activePromptPresetId }
                                     ?.name

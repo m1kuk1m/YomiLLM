@@ -1,5 +1,6 @@
 package com.example.japanesegrammarapp.ui
 
+import com.example.japanesegrammarapp.domain.model.EndpointHealthState
 import com.example.japanesegrammarapp.domain.model.LlmEndpoint
 import com.example.japanesegrammarapp.domain.model.OcrBoxDetectionSettings
 import com.example.japanesegrammarapp.domain.model.PromptPreset
@@ -21,6 +22,9 @@ data class SettingsUiState(
     val useBackupApi: Boolean = false,
     val autoRetryOnError: Boolean = false,
     val failoverToNextEndpoint: Boolean = false,
+    val decisionApiEnabled: Boolean = false,
+    val decisionModel: String = com.example.japanesegrammarapp.domain.model.DecisionConfig.DEFAULT_MODEL,
+    val decisionEndpoints: List<LlmEndpoint> = emptyList(),
 
     val autoDeskewAfterCapture: Boolean = false,
     val imageTokenizerMode: String = "faithful",
@@ -43,6 +47,7 @@ data class SettingsUiState(
     val providerKeys: Map<String, String> = emptyMap(),
     val providerEndpoints: Map<String, List<LlmEndpoint>> = emptyMap(),
     val endpointHasKeys: Map<String, Boolean> = emptyMap(),
+    val endpointHealthStates: Map<String, EndpointHealthState> = emptyMap(),
     val fetchingEndpointId: String? = null,
     val promptPresets: List<PromptPreset> = emptyList(),
     val activePromptPresetId: String = PromptPreset.DEFAULT_PRESET_ID,

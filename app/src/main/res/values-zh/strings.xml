@@ -586,6 +586,8 @@
     <string name="reset_prompt">恢复默认</string>
     <string name="reset_all_prompts">恢复全部默认</string>
     <string name="prompt_select_type">选择分析职责</string>
+    <string name="prompt_status_default">内置默认</string>
+    <string name="prompt_status_customized">已自定义</string>
 
     <string name="prompt_presets">提示词预设</string>
     <string name="preset_name">预设名称</string>
@@ -806,5 +808,17 @@
     <string name="ocr_status_enabled">本地 OCR 开启</string>
     <string name="ocr_status_disabled">AI 视觉直传</string>
     <string name="advanced_summary_subtitle">API 调试返回与应用运行日志</string>
+    <string name="step_decision_pos">词性决策染色</string>
+    <string name="module_decision_pos">决策模型词性染色</string>
+    <string name="module_segments_decoupled">深度分词解析（去耦合版）</string>
+    <string name="settings_llm_group_decision">决策模型 API（词性快速染色）</string>
+    <string name="decision_api_enable">启用独立决策模型进行词性染色</string>
+    <string name="decision_api_enable_desc">拆词后立即调用独立决策模型对词卡进行词性判定并染色，减轻主模型注意力负担；关闭时保持原有流程。</string>
+    <string name="decision_api_model">决策模型名称</string>
+    <string name="decision_api_model_hint">默认：gemini-decision-1</string>
+    <string name="decision_api_save_model">应用</string>
+    <string name="decision_api_reset_model">恢复默认</string>
+    <string name="decision_api_missing_endpoint_hint">已开启决策模型，但尚未添加有效的 API 节点或密钥。请在下方添加一个节点，否则将跳过决策染色。</string>
+    <string name="decision_api_endpoint_note">默认接口为 Google Decisions API，与主用/备用及各模块大模型池完全隔离。</string>
 </resources>
 

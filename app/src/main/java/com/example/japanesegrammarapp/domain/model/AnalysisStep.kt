@@ -9,5 +9,6 @@ enum class AnalysisStep(val labelResId: Int) {
     GRAMMAR(com.example.japanesegrammarapp.R.string.step_grammar),
     TRANSLATION(com.example.japanesegrammarapp.R.string.step_translation),
     CLAUSES(com.example.japanesegrammarapp.R.string.step_clauses),
-    SEGMENTS(com.example.japanesegrammarapp.R.string.step_segments)
+    SEGMENTS(com.example.japanesegrammarapp.R.string.step_segments),
+    DECISION_POS(com.example.japanesegrammarapp.R.string.step_decision_pos)
 }

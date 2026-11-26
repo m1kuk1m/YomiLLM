@@ -38,6 +38,14 @@ class AnalysisProgressStore {
         update(recordId) { it.copy(segmentsCompleted = true) }
     }
 
+    fun setDecisionPosEnabled(recordId: Int, enabled: Boolean) {
+        update(recordId) { it.copy(decisionPosEnabled = enabled) }
+    }
+
+    fun markDecisionPosCompleted(recordId: Int) {
+        update(recordId) { it.copy(decisionPosCompleted = true) }
+    }
+
     fun markClausesCompleted(recordId: Int) {
         update(recordId) { it.copy(clausesCompleted = true) }
     }

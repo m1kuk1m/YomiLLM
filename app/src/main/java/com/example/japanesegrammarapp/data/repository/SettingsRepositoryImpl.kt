@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import com.example.japanesegrammarapp.di.SecurePrefs
 import com.example.japanesegrammarapp.di.StandardPrefs
 import com.example.japanesegrammarapp.domain.ApplicationScope
+import com.example.japanesegrammarapp.domain.model.DecisionConfig
 import com.example.japanesegrammarapp.domain.model.LlmConfig
 import com.example.japanesegrammarapp.domain.model.LlmEndpoint
 import com.example.japanesegrammarapp.domain.model.OcrBoxDetectionSettings
@@ -39,6 +40,8 @@ class SettingsRepositoryImpl @Inject constructor(
     @Volatile private var cachedUseBackupApi: Boolean? = null
     @Volatile private var cachedAutoRetryOnError: Boolean? = null
     @Volatile private var cachedFailoverToNextEndpoint: Boolean? = null
+    @Volatile private var cachedDecisionApiEnabled: Boolean? = null
+    @Volatile private var cachedDecisionModel: String? = null
     @Volatile private var cachedOcrBoxDetectionSettings: OcrBoxDetectionSettings? = null
     @Volatile private var cachedBackupProvider: String? = null
     @Volatile private var cachedBackupModel: String? = null
@@ -193,7 +196,16 @@ class SettingsRepositoryImpl @Inject constructor(
         return when(providerId) {
             "Gemini" -> "Gemini"
             "Vertex AI" -> "Vertex AI"
+            DecisionConfig.PROVIDER_ID -> DecisionConfig.PROVIDER_ID
             else -> "OpenAI Compatible"
+        }
+    }
+
+    private fun defaultUrlForProvider(provider: String): String {
+        return if (provider == DecisionConfig.PROVIDER_ID) {
+            DecisionConfig.DEFAULT_URL
+        } else {
+            LlmConfig.defaultUrls[provider] ?: ""
         }
     }
 
@@ -463,7 +475,7 @@ class SettingsRepositoryImpl @Inject constructor(
                 .map { endpoint ->
                     endpoint.copy(enabled = endpoint.enabled && getApiKeyForEndpoint(endpoint.id).isNotBlank())
                 }
-                .sortedWith(compareBy<LlmEndpoint> { it.priority }.thenBy { it.lastUsedAtMs }.thenBy { it.name })
+                .sortedWith(compareBy<LlmEndpoint> { it.priority }.thenBy { it.name }.thenBy { it.id })
             cachedEndpoints[provider] = normalized
             if (loaded.isEmpty()) {
                 saveEndpoints(provider, normalized)
@@ -490,7 +502,7 @@ class SettingsRepositoryImpl @Inject constructor(
         val nextApiKey = apiKey ?: getApiKeyForEndpoint(endpoint.id)
         val cleanEndpoint = endpoint.copy(
             name = endpoint.name.ifBlank { "Default" },
-            baseUrl = endpoint.baseUrl.ifBlank { LlmConfig.defaultUrls[endpoint.provider] ?: "" },
+            baseUrl = endpoint.baseUrl.ifBlank { defaultUrlForProvider(endpoint.provider) },
             enabled = endpoint.enabled && nextApiKey.isNotBlank(),
             priority = endpoint.priority.coerceAtLeast(0),
             weight = endpoint.weight.coerceAtLeast(1)
@@ -533,64 +545,6 @@ class SettingsRepositoryImpl @Inject constructor(
             saveEndpoints(provider, next)
         }
         return removed
-    }
-
-    override fun markEndpointSuccess(provider: String, endpointId: String) {
-        updateEndpoint(provider, endpointId) {
-            it.copy(
-                cooldownUntilMs = 0L,
-                consecutiveFailures = 0,
-                lastError = null,
-                lastUsedAtMs = System.currentTimeMillis()
-            )
-        }
-    }
-
-    override fun markEndpointFailure(provider: String, endpointId: String, error: String, cooldownMs: Long) {
-        val now = System.currentTimeMillis()
-        updateEndpoint(provider, endpointId) {
-            it.copy(
-                cooldownUntilMs = now + cooldownMs.coerceAtLeast(0L),
-                consecutiveFailures = it.consecutiveFailures + 1,
-                lastError = error,
-                lastUsedAtMs = now
-            )
-        }
-    }
-
-    override fun touchEndpoint(provider: String, endpointId: String) {
-        updateEndpoint(provider, endpointId) {
-            it.copy(lastUsedAtMs = System.currentTimeMillis())
-        }
-    }
-
-    override fun buildLlmApiConfigs(provider: String, modelName: String): List<LlmApiConfig> {
-        val now = System.currentTimeMillis()
-        val baseProvider = getBaseProviderType(provider)
-        val endpoints = getEndpoints(provider)
-            .filter { endpoint ->
-                endpoint.enabled &&
-                    getApiKeyForEndpoint(endpoint.id).isNotBlank() &&
-                    (endpoint.cooldownUntilMs <= now || endpoint.cooldownUntilMs == 0L)
-            }
-            .sortedWith(
-                compareBy<LlmEndpoint> { it.priority }
-                    .thenByDescending { endpointRotationScore(it, now) }
-                    .thenBy { it.consecutiveFailures }
-                    .thenBy { it.name }
-            )
-
-        return endpoints.map { endpoint ->
-            LlmApiConfig(
-                provider = provider,
-                baseProvider = baseProvider,
-                modelName = modelName,
-                url = endpoint.baseUrl.ifBlank { LlmConfig.defaultUrls[provider] ?: "" },
-                key = getApiKeyForEndpoint(endpoint.id),
-                endpointId = endpoint.id,
-                endpointName = endpoint.name
-            )
-        }
     }
 
     override fun getBackupProvider(): String {
@@ -916,6 +870,7 @@ class SettingsRepositoryImpl @Inject constructor(
         return when (promptKey) {
             "prompt_translation" -> PromptManager.SYSTEM_PROMPT_TRANSLATION
             "prompt_segments" -> PromptManager.SYSTEM_PROMPT_SEGMENTS
+            "prompt_segments_decoupled" -> PromptManager.SYSTEM_PROMPT_SEGMENTS_DECOUPLED
             "prompt_clauses" -> PromptManager.SYSTEM_PROMPT_CLAUSES
             "prompt_grammar" -> PromptManager.SYSTEM_PROMPT_GRAMMAR
             "prompt_image_ocr" -> PromptManager.SYSTEM_PROMPT_IMAGE_OCR
@@ -962,7 +917,7 @@ class SettingsRepositoryImpl @Inject constructor(
             id = defaultEndpointId(provider),
             provider = provider,
             name = "Default",
-            baseUrl = LlmConfig.defaultUrls[provider] ?: "",
+            baseUrl = defaultUrlForProvider(provider),
             enabled = true,
             priority = 0,
             weight = 1
@@ -971,7 +926,7 @@ class SettingsRepositoryImpl @Inject constructor(
 
     private fun migrateLegacyEndpoint(provider: String): List<LlmEndpoint> {
         val legacyKey = securePrefs.getString("${provider}_key", "") ?: ""
-        val defaultUrl = LlmConfig.defaultUrls[provider] ?: ""
+        val defaultUrl = defaultUrlForProvider(provider)
         val legacyUrl = settingPrefs.getString("${provider}_url", defaultUrl) ?: defaultUrl
         val endpoint = getDefaultEndpoint(provider).copy(baseUrl = legacyUrl)
 
@@ -992,33 +947,16 @@ class SettingsRepositoryImpl @Inject constructor(
             .map { endpoint ->
                 endpoint.copy(
                     name = endpoint.name.ifBlank { "Default" },
-                    baseUrl = endpoint.baseUrl.ifBlank { LlmConfig.defaultUrls[provider] ?: "" },
+                    baseUrl = endpoint.baseUrl.ifBlank { defaultUrlForProvider(provider) },
                     enabled = endpoint.enabled && getApiKeyForEndpoint(endpoint.id).isNotBlank(),
                     priority = endpoint.priority.coerceAtLeast(0),
                     weight = endpoint.weight.coerceAtLeast(1)
                 )
             }
-            .sortedWith(compareBy<LlmEndpoint> { it.priority }.thenBy { it.lastUsedAtMs }.thenBy { it.name })
+            .sortedWith(compareBy<LlmEndpoint> { it.priority }.thenBy { it.name }.thenBy { it.id })
 
         cachedEndpoints[provider] = normalized
         settingPrefs.edit().putString(endpointPoolKey(provider), gson.toJson(normalized)).apply()
-    }
-
-    private fun updateEndpoint(provider: String, endpointId: String, transform: (LlmEndpoint) -> LlmEndpoint) {
-        val endpoints = getEndpoints(provider)
-        val next = endpoints.map { endpoint ->
-            if (endpoint.id == endpointId) transform(endpoint) else endpoint
-        }
-        saveEndpoints(provider, next)
-    }
-
-    private fun endpointRotationScore(endpoint: LlmEndpoint, now: Long): Long {
-        val weight = endpoint.weight.coerceAtLeast(1)
-        if (endpoint.lastUsedAtMs <= 0L) {
-            return Long.MAX_VALUE
-        }
-        val idleSeconds = ((now - endpoint.lastUsedAtMs).coerceAtLeast(0L) / 1000L)
-        return idleSeconds.coerceAtMost(Long.MAX_VALUE / weight) * weight
     }
 
     private fun saveSecureString(
@@ -1214,6 +1152,45 @@ class SettingsRepositoryImpl @Inject constructor(
     override fun setFailoverToNextEndpoint(value: Boolean) {
         cachedFailoverToNextEndpoint = value
         settingPrefs.edit().putBoolean("failover_to_next_endpoint", value).apply()
+    }
+
+    override fun getDecisionApiEnabled(): Boolean {
+        return cachedDecisionApiEnabled ?: synchronized(this) {
+            val cached = cachedDecisionApiEnabled
+            if (cached != null) {
+                cached
+            } else {
+                val value = settingPrefs.getBoolean("decision_api_enabled", false)
+                cachedDecisionApiEnabled = value
+                value
+            }
+        }
+    }
+
+    override fun setDecisionApiEnabled(value: Boolean) {
+        cachedDecisionApiEnabled = value
+        settingPrefs.edit().putBoolean("decision_api_enabled", value).apply()
+    }
+
+    override fun getDecisionModel(): String {
+        return cachedDecisionModel ?: synchronized(this) {
+            val cached = cachedDecisionModel
+            if (cached != null) {
+                cached
+            } else {
+                val value = settingPrefs.getString("decision_api_model", DecisionConfig.DEFAULT_MODEL)
+                    ?.ifBlank { DecisionConfig.DEFAULT_MODEL }
+                    ?: DecisionConfig.DEFAULT_MODEL
+                cachedDecisionModel = value
+                value
+            }
+        }
+    }
+
+    override fun setDecisionModel(model: String) {
+        val normalized = model.trim().ifBlank { DecisionConfig.DEFAULT_MODEL }
+        cachedDecisionModel = normalized
+        settingPrefs.edit().putString("decision_api_model", normalized).apply()
     }
 
     // --- Steam Deck Companion Settings ---

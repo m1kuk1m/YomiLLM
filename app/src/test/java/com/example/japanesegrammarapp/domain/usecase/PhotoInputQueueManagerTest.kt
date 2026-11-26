@@ -1,26 +1,21 @@
 package com.example.japanesegrammarapp.domain.usecase
 
 import android.net.Uri
-import com.example.japanesegrammarapp.domain.model.ComponentModelConfig
-import com.example.japanesegrammarapp.domain.repository.ImageAttachmentLoader
-import com.example.japanesegrammarapp.domain.repository.ImagePayload
-import com.example.japanesegrammarapp.domain.repository.LlmAnalysisService
+import com.example.japanesegrammarapp.domain.repository.ImageOcrStreamChunk
+import com.example.japanesegrammarapp.domain.repository.ImageTextExtractor
 import com.example.japanesegrammarapp.domain.repository.LlmApiConfig
-import com.example.japanesegrammarapp.domain.repository.LlmResultMetadata
-import com.example.japanesegrammarapp.domain.repository.OcrRepository
-import com.example.japanesegrammarapp.domain.repository.SettingsRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
-import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.StandardTestDispatcher
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.After
 import org.junit.Test
 import org.mockito.Mockito.mock
 
@@ -39,29 +34,30 @@ class PhotoInputQueueManagerTest {
         Dispatchers.resetMain()
     }
 
-    private class FakeImageAttachmentLoader : ImageAttachmentLoader {
-        override suspend fun loadAsBase64(uriString: String): ImagePayload? {
-            return ImagePayload("fake_base64_$uriString", "image/jpeg")
+    private class FakeImageTextExtractor(
+        private val textProvider: suspend (String) -> String = { "local_ocr_text" }
+    ) : ImageTextExtractor {
+        override suspend fun extractTextLocal(imageUri: String, cleanSpaces: Boolean): String {
+            return textProvider(imageUri)
         }
-    }
 
-    private class FakeOcrRepository(
-        private val localTextProvider: suspend (String) -> String = { "local_ocr_text" }
-    ) : OcrRepository {
-        override suspend fun extractTextFromImage(imageUri: String): String {
-            return localTextProvider(imageUri)
+        override fun extractTextWithVisionStreaming(
+            imageBase64: String,
+            mimeType: String?,
+            primaryConfigs: List<LlmApiConfig>,
+            backupConfigs: List<LlmApiConfig>,
+            onRetry: (attempt: Int) -> Unit,
+            onBackup: (backupProvider: String) -> Unit,
+            recordId: Int?,
+            stepName: String?
+        ): Flow<ImageOcrStreamChunk> = emptyFlow()
+
+        override suspend fun extractTextPreferVisionWithLocalFallback(
+            imageUri: String,
+            stepName: String
+        ): String {
+            return textProvider(imageUri)
         }
-    }
-
-    private class FakeSettingsRepository : SettingsRepository by mock(SettingsRepository::class.java) {
-        override fun getRemoveAccidentalSpaces(): Boolean = false
-        override fun getComponentModelConfig(apiTypeLabel: String): ComponentModelConfig = ComponentModelConfig()
-        override fun getActiveProvider(): String = "mock"
-        override fun getActiveModel(provider: String): String = "mock"
-        override fun buildLlmApiConfigs(provider: String, modelName: String): List<LlmApiConfig> = emptyList() // Fallback to local OCR
-        override fun getUseBackupApi(): Boolean = false
-        override fun getBackupProvider(): String = ""
-        override fun getBackupModel(): String = ""
     }
 
     @Test
@@ -71,7 +67,7 @@ class PhotoInputQueueManagerTest {
         val page1Deferred = CompletableDeferred<String>()
         val page2Deferred = CompletableDeferred<String>()
 
-        val localOcr = FakeOcrRepository { uriStr ->
+        val extractor = FakeImageTextExtractor { uriStr ->
             if (uriStr.contains("page1")) {
                 page1Deferred.await()
             } else {
@@ -80,10 +76,7 @@ class PhotoInputQueueManagerTest {
         }
 
         val manager = PhotoInputQueueManager(
-            imageAttachmentLoader = FakeImageAttachmentLoader(),
-            llmAnalysisService = mock(LlmAnalysisService::class.java),
-            ocrRepository = localOcr,
-            settingsRepository = FakeSettingsRepository(),
+            imageTextExtractor = extractor,
             externalScope = testScope
         )
 
@@ -135,15 +128,12 @@ class PhotoInputQueueManagerTest {
     fun testNewlineSeparatesConsecutivePhotoTexts() = runTest(testDispatcher) {
         val testScope = this
 
-        val localOcr = FakeOcrRepository { uriStr ->
+        val extractor = FakeImageTextExtractor { uriStr ->
             if (uriStr.contains("shot1")) "Hello" else "World"
         }
 
         val manager = PhotoInputQueueManager(
-            imageAttachmentLoader = FakeImageAttachmentLoader(),
-            llmAnalysisService = mock(LlmAnalysisService::class.java),
-            ocrRepository = localOcr,
-            settingsRepository = FakeSettingsRepository(),
+            imageTextExtractor = extractor,
             externalScope = testScope
         )
 
@@ -178,10 +168,7 @@ class PhotoInputQueueManagerTest {
         val testScope = this
 
         val manager = PhotoInputQueueManager(
-            imageAttachmentLoader = FakeImageAttachmentLoader(),
-            llmAnalysisService = mock(LlmAnalysisService::class.java),
-            ocrRepository = FakeOcrRepository { "Text" },
-            settingsRepository = FakeSettingsRepository(),
+            imageTextExtractor = FakeImageTextExtractor { "Text" },
             externalScope = testScope
         )
 
@@ -202,10 +189,7 @@ class PhotoInputQueueManagerTest {
         val testScope = this
 
         val manager = PhotoInputQueueManager(
-            imageAttachmentLoader = FakeImageAttachmentLoader(),
-            llmAnalysisService = mock(LlmAnalysisService::class.java),
-            ocrRepository = FakeOcrRepository { "Text" },
-            settingsRepository = FakeSettingsRepository(),
+            imageTextExtractor = FakeImageTextExtractor { "Text" },
             externalScope = testScope
         )
 

@@ -13,6 +13,7 @@ import com.example.japanesegrammarapp.domain.model.PUNCTUATION_CHARS
 import com.example.japanesegrammarapp.domain.model.derivePosCategory
 import com.example.japanesegrammarapp.domain.repository.SettingsRepository
 import com.example.japanesegrammarapp.utils.AppLogger
+import com.example.japanesegrammarapp.utils.LlmResponseSanitizer
 import com.google.gson.Gson
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
@@ -38,38 +39,6 @@ class LlmAnalysisServiceImpl @Inject constructor(
             '?', '!', '(', ')', '[', ']', '{', '}', ':', ';',
             '‼', '⁉', '⁇', '⁈', '〰'
         )
-        val THINKING_REGEX = Regex("<think>([\\s\\S]*?)(?:</think>|$)", RegexOption.DOT_MATCHES_ALL)
-    }
-
-    override suspend fun executeImageOcr(
-        imageBase64: String,
-        mimeType: String?,
-        primaryConfigs: List<LlmApiConfig>,
-        backupConfigs: List<LlmApiConfig>,
-        onRetry: (attempt: Int) -> Unit,
-        onBackup: (backupProvider: String) -> Unit,
-        recordId: Int?,
-        stepName: String?
-    ): Flow<Pair<String?, LlmResultMetadata>> {
-        val systemPrompt = settingsRepository.getCustomPrompt(AnalysisModule.IMAGE_OCR.promptKey)
-        val userPrompt = "画像内の日本語テキストを視覚情報に従って正確に読み取り、余計な説明・装飾・振仮名は一切含めず、本文のみをテキストで出力してください。"
-
-        return executeAnalysisStepStreaming(
-            systemPrompt = systemPrompt,
-            userPrompt = userPrompt,
-            imageBase64 = imageBase64,
-            mimeType = mimeType,
-            apiTypeLabel = AnalysisModule.IMAGE_OCR.id,
-            primaryConfigs = primaryConfigs,
-            backupConfigs = backupConfigs,
-            onRetry = onRetry,
-            onBackup = onBackup,
-            recordId = recordId,
-            stepName = stepName,
-            timeoutMs = DEFAULT_STEP_TIMEOUT_MS
-        ) { accumulated ->
-            accumulated.trim()
-        }
     }
 
     override suspend fun executeTokenizer(
@@ -91,9 +60,9 @@ class LlmAnalysisServiceImpl @Inject constructor(
 
         val userPrompt = when {
             imageBase64 != null && imageTokenizerMode == "repair" -> "画像内の日本語テキストを視覚情報優先で読み取り、不鮮明な場合も文脈は類似字形候補を選ぶ補助に限定してください。意味・自然さ・頻度・安全性を理由に一般語へ置き換えず、濁点/半濁点/長音符/小書き文字は画像上の痕跡を優先してください。テキストで出力してください。"
-            imageBase64 != null -> "画像内の日本語テキストを原文のまま忠実に認識し、一切修正せず、文字を変更しないでトークン化してください。テキストで出力してください。"
-            isOcrMode -> "分析対象のOCRテキスト: \"$text\"\nこのテキストのOCR誤認識（て・で誤認、濁点脱落など）を自动修正した上で、トークン化し、出力してください。"
-            else -> "分析対象の文: \"$text\"\nこの文をトークン化し、出力してください。"
+            imageBase64 != null -> "画像内の日本語テキストを原文のまま忠実に読み取り、トークン化してプレーンテキストで出力してください。"
+            isOcrMode -> "<input_text>\n$text\n</input_text>\n上記のOCRテキストについて、明らかなOCR誤認（て・で誤認、濁点脱落など）のみを最小限に自動修正したうえで、トークン化して出力してください。"
+            else -> "<input_text>\n$text\n</input_text>\n上記の文をトークン化して出力してください。"
         }
 
         return executeAnalysisStepStreaming(
@@ -141,9 +110,9 @@ class LlmAnalysisServiceImpl @Inject constructor(
         stepName: String?
     ): Flow<Pair<DetailedAnalysisResult?, LlmResultMetadata>> {
         val userPrompt = if (text.isNotBlank()) {
-            "分析対象の文: \"$text\"\nこの文の自然な中国語訳を出力してください。"
+            "<input_text>\n$text\n</input_text>\n上記の文を簡体字中国語に翻訳してください。"
         } else {
-            "画像内の日本語テキストを自然な中国語（簡体字）に翻訳してください。"
+            "画像内の日本語テキストを簡体字中国語に翻訳してください。"
         }
 
         return executeAnalysisStepStreaming(
@@ -176,7 +145,7 @@ class LlmAnalysisServiceImpl @Inject constructor(
         stepName: String?
     ): Flow<Pair<DetailedAnalysisResult?, LlmResultMetadata>> {
         val userPrompt = if (text.isNotBlank()) {
-            "分析対象の文: \"$text\"\nこの文の文節（フレーズ）ごとの文法的役割の詳細な解説を行ってください。"
+            "<input_text>\n$text\n</input_text>\n上記の文の文節・節ごとの文法的役割を解説してください。"
         } else {
             "画像内のすべての日本語の文節構造と文法的役割を詳細に分析してください。"
         }
@@ -223,9 +192,9 @@ class LlmAnalysisServiceImpl @Inject constructor(
         stepName: String?
     ): Flow<Pair<DetailedAnalysisResult?, LlmResultMetadata>> {
         val userPrompt = if (text.isNotBlank()) {
-            "分析対象の文: \"$text\"\nこの文に含まれる最も重要かつ難度の高い文法項目・慣用表現を厳選して解説してください。"
+            "<input_text>\n$text\n</input_text>\n上記の文に含まれる重要な文法項目・文型・慣用表現を抽出して解説してください。"
         } else {
-            "画像内のすべての日本語の文法表现や固定表現を詳細に分析してください。"
+            "画像内の日本語に含まれる重要な文法項目・文型・固定表現を抽出して解説してください。"
         }
 
         return executeAnalysisStepStreaming(
@@ -266,7 +235,8 @@ class LlmAnalysisServiceImpl @Inject constructor(
         onRetry: (attempt: Int) -> Unit,
         onBackup: (backupProvider: String) -> Unit,
         recordId: Int?,
-        stepName: String?
+        stepName: String?,
+        decoupledPosMode: Boolean
     ): Flow<Pair<DetailedAnalysisResult?, LlmResultMetadata>> = flow {
         val nonPunctuationTokens = tokens.filter { !isPunctuationToken(it) }
 
@@ -279,13 +249,15 @@ class LlmAnalysisServiceImpl @Inject constructor(
 
         val tokensStr = nonPunctuationTokens.joinToString(", ")
         val userPrompt = if (text.isNotBlank()) {
-            "分析対象の文: \"$text\"\nユーザーが提供したトークン配列（記号除く）: $tokensStr\n各トークンの詳細な文法分析を行ってください。"
+            "<input_text>\n$text\n</input_text>\n<tokens>\n$tokensStr\n</tokens>\n上記の文とトークン配列（記号除外済み）に基づき、各トークンを分析してください。"
         } else {
-            "画像内の日本語テキストのトークン配列（記号除く）: $tokensStr\n各トークンの詳細な文法分析を行ってください。"
+            "<tokens>\n$tokensStr\n</tokens>\n画像内の日本語テキストと上記のトークン配列（記号除外済み）に基づき、各トークンを分析してください。"
         }
 
+        val promptKey = if (decoupledPosMode) "prompt_segments_decoupled" else AnalysisModule.SEGMENTS.promptKey
+
         executeAnalysisStepStreaming(
-            systemPrompt = settingsRepository.getCustomPrompt("prompt_segments"),
+            systemPrompt = settingsRepository.getCustomPrompt(promptKey),
             userPrompt = userPrompt,
             imageBase64 = imageBase64,
             mimeType = mimeType,
@@ -300,39 +272,78 @@ class LlmAnalysisServiceImpl @Inject constructor(
         ) { accumulated ->
             val lines = accumulated.lines().map { it.trim() }.filter { it.isNotBlank() }
             val segments = lines.mapNotNull { line ->
-                val parts = line.split("|")
-                if (parts.size >= 8) {
-                    val pos = parts[3].trim().takeIf { it.isNotBlank() && it != "null" }
-                    WordSegment(
-                        text = parts[0].trim(),
-                        reading = parts[1].trim().takeIf { it.isNotBlank() && it != "null" },
-                        meaning = parts[2].trim().takeIf { it.isNotBlank() && it != "null" },
-                        partOfSpeech = pos,
-                        posCategory = derivePosCategory(pos),
-                        dictionaryForm = parts[4].trim().takeIf { it.isNotBlank() && it != "null" },
-                        dictionaryFormReading = parts[5].trim().takeIf { it.isNotBlank() && it != "null" },
-                        inflection = parts[6].trim().takeIf { it.isNotBlank() && it != "null" },
-                        role = parts.drop(7).joinToString("|").trim().takeIf { it.isNotBlank() && it != "null" }
-                    )
-                } else if (parts.size >= 5) {
-                    val pos = parts[3].trim().takeIf { it.isNotBlank() && it != "null" }
-                    val remainingParts = parts.drop(4).map { it.trim() }.filter { it.isNotBlank() && it != "null" }
-                    WordSegment(
-                        text = parts[0].trim(),
-                        reading = parts[1].trim().takeIf { it.isNotBlank() && it != "null" },
-                        meaning = parts[2].trim().takeIf { it.isNotBlank() && it != "null" },
-                        partOfSpeech = pos,
-                        posCategory = derivePosCategory(pos),
-                        role = remainingParts.joinToString(" | ").takeIf { it.isNotBlank() }
-                    )
-                } else null
+                parseSegmentLine(line, decoupledPosMode)
             }
 
-            val returnedSegments = segments
-            val finalSegments = alignTokensWithSegments(tokens, returnedSegments)
+            val finalSegments = alignTokensWithSegments(tokens, segments)
             DetailedAnalysisResult(segments = finalSegments)
         }.collect {
             emit(it)
+        }
+    }
+
+    private fun parseSegmentLine(line: String, decoupledPosMode: Boolean): WordSegment? {
+        val parts = line.split("|")
+        fun cleanPart(idx: Int): String? = parts.getOrNull(idx)?.trim()?.takeIf { it.isNotBlank() && it != "null" }
+        fun cleanReading(idx: Int): String? = LlmResponseSanitizer.normalizeReadingToHiragana(cleanPart(idx))
+
+        if (decoupledPosMode) {
+            return when {
+                parts.size >= 7 -> {
+                    // Decoupled 7-field format: Word|Reading|Meaning|DictionaryForm|DictionaryFormReading|Inflection|Role
+                    WordSegment(
+                        text = parts[0].trim(),
+                        reading = cleanReading(1),
+                        meaning = cleanPart(2),
+                        partOfSpeech = null,
+                        posCategory = null,
+                        dictionaryForm = cleanPart(3),
+                        dictionaryFormReading = cleanReading(4),
+                        inflection = cleanPart(5),
+                        role = parts.drop(6).joinToString("|").trim().takeIf { it.isNotBlank() && it != "null" }
+                    )
+                }
+                parts.size >= 4 -> {
+                    val remainingParts = parts.drop(3).map { it.trim() }.filter { it.isNotBlank() && it != "null" }
+                    WordSegment(
+                        text = parts[0].trim(),
+                        reading = cleanReading(1),
+                        meaning = cleanPart(2),
+                        role = remainingParts.joinToString(" | ").takeIf { it.isNotBlank() }
+                    )
+                }
+                else -> null
+            }
+        }
+
+        return when {
+            parts.size >= 8 -> {
+                val pos = cleanPart(3)
+                WordSegment(
+                    text = parts[0].trim(),
+                    reading = cleanReading(1),
+                    meaning = cleanPart(2),
+                    partOfSpeech = pos,
+                    posCategory = derivePosCategory(pos),
+                    dictionaryForm = cleanPart(4),
+                    dictionaryFormReading = cleanReading(5),
+                    inflection = cleanPart(6),
+                    role = parts.drop(7).joinToString("|").trim().takeIf { it.isNotBlank() && it != "null" }
+                )
+            }
+            parts.size >= 5 -> {
+                val pos = cleanPart(3)
+                val remainingParts = parts.drop(4).map { it.trim() }.filter { it.isNotBlank() && it != "null" }
+                WordSegment(
+                    text = parts[0].trim(),
+                    reading = cleanReading(1),
+                    meaning = cleanPart(2),
+                    partOfSpeech = pos,
+                    posCategory = derivePosCategory(pos),
+                    role = remainingParts.joinToString(" | ").takeIf { it.isNotBlank() }
+                )
+            }
+            else -> null
         }
     }
 
@@ -382,7 +393,7 @@ class LlmAnalysisServiceImpl @Inject constructor(
                     when (event) {
                         is com.example.japanesegrammarapp.domain.model.LlmStreamEvent.Chunk -> {
                             accumulatedText += event.text
-                            val cleanText = accumulatedText.replace(THINKING_REGEX, "").trimStart()
+                            val cleanText = LlmResponseSanitizer.cleanModelOutput(accumulatedText)
                             val parsed = parser(cleanText)
                             emit(Pair(parsed, currentMetadata))
                         }
@@ -393,19 +404,19 @@ class LlmAnalysisServiceImpl @Inject constructor(
                             providerLabel = event.provider
                             modelLabel = event.modelName
                             currentMetadata = event.usage
-                            val cleanText = accumulatedText.replace(THINKING_REGEX, "").trimStart()
+                            val cleanText = LlmResponseSanitizer.cleanModelOutput(accumulatedText)
                             val parsed = parser(cleanText)
                             emit(Pair(parsed, currentMetadata))
                         }
                     }
                 }
             }
-            val thinkMatches = THINKING_REGEX.findAll(accumulatedText)
+            val thinkMatches = LlmResponseSanitizer.THINKING_REGEX.findAll(accumulatedText)
             val extractedThink = thinkMatches.map { it.groupValues.getOrNull(1)?.trim() ?: "" }
                 .filter { it.isNotBlank() }
                 .joinToString("\n")
                 .trim()
-            val finalRawResponse = accumulatedText.replace(THINKING_REGEX, "").trimStart()
+            val finalRawResponse = LlmResponseSanitizer.cleanModelOutput(accumulatedText)
             
             val finalReasoningContent = if (accumulatedThoughtText.isNotBlank()) {
                 if (extractedThink.isNotBlank()) {
@@ -446,7 +457,7 @@ class LlmAnalysisServiceImpl @Inject constructor(
         } catch (e: TimeoutCancellationException) {
             val elapsedMs = System.currentTimeMillis() - stepStartMs
             val message = "Step timed out after ${timeoutMs / 1000}s"
-            val cleanRawResponse = accumulatedText.replace(THINKING_REGEX, "").trimStart()
+            val cleanRawResponse = LlmResponseSanitizer.cleanModelOutput(accumulatedText)
             val reasoningLevel = settingsRepository.getEffectiveReasoningLevel(apiTypeLabel).name
             AppLogger.apiError(
                 apiTypeLabel = apiTypeLabel,
@@ -487,7 +498,7 @@ class LlmAnalysisServiceImpl @Inject constructor(
             throw Exception(message, e)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            val cleanRawResponse = accumulatedText.replace(THINKING_REGEX, "").trimStart()
+            val cleanRawResponse = LlmResponseSanitizer.cleanModelOutput(accumulatedText)
             val reasoningLevel = settingsRepository.getEffectiveReasoningLevel(apiTypeLabel).name
             AppLogger.apiError(
                 apiTypeLabel = apiTypeLabel,

@@ -4,11 +4,13 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.japanesegrammarapp.domain.repository.EndpointHealthTracker
 import com.example.japanesegrammarapp.domain.repository.SettingsRepository
 import com.example.japanesegrammarapp.domain.repository.LlmRepository
 import com.example.japanesegrammarapp.domain.repository.HistoryRepository
 import com.example.japanesegrammarapp.domain.model.ModelTokenUsage
 import com.example.japanesegrammarapp.domain.model.DailyTokenUsage
+import com.example.japanesegrammarapp.domain.model.DecisionConfig
 import com.example.japanesegrammarapp.domain.model.EndpointUrlValidator
 import com.example.japanesegrammarapp.domain.model.LlmConfig
 import com.example.japanesegrammarapp.domain.model.LlmEndpoint
@@ -36,6 +38,7 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val application: Application,
     private val settingsRepository: SettingsRepository,
+    private val endpointHealthTracker: EndpointHealthTracker,
     private val llmRepository: LlmRepository,
     private val historyRepository: HistoryRepository
 ) : ViewModel() {
@@ -75,6 +78,8 @@ class SettingsViewModel @Inject constructor(
             val useBackupApi = settingsRepository.getUseBackupApi()
             val autoRetryOnError = settingsRepository.getAutoRetryOnError()
             val failoverToNextEndpoint = settingsRepository.getFailoverToNextEndpoint()
+            val decisionApiEnabled = settingsRepository.getDecisionApiEnabled()
+            val decisionModel = settingsRepository.getDecisionModel()
             val componentLabels = com.example.japanesegrammarapp.domain.model.AnalysisModule.entries.map { it.id }
             val componentReasoningLevels = componentLabels.associateWith {
                 settingsRepository.getComponentReasoningLevel(it)
@@ -98,8 +103,8 @@ class SettingsViewModel @Inject constructor(
             val pUrls = allProviders.associateWith { settingsRepository.getApiUrl(it) }
             val pKeys = allProviders.associateWith { settingsRepository.getApiKey(it) }
             val pEndpoints = allProviders.associateWith { settingsRepository.getEndpoints(it) }
-            val endpointHasKeys = pEndpoints.values
-                .flatten()
+            val decisionEndpoints = settingsRepository.getEndpoints(DecisionConfig.PROVIDER_ID)
+            val endpointHasKeys = (pEndpoints.values.flatten() + decisionEndpoints)
                 .associate { endpoint -> endpoint.id to settingsRepository.getApiKeyForEndpoint(endpoint.id).isNotBlank() }
 
             val promptPresets = settingsRepository.getPromptPresets()
@@ -119,6 +124,9 @@ class SettingsViewModel @Inject constructor(
                     useBackupApi = useBackupApi,
                     autoRetryOnError = autoRetryOnError,
                     failoverToNextEndpoint = failoverToNextEndpoint,
+                    decisionApiEnabled = decisionApiEnabled,
+                    decisionModel = decisionModel,
+                    decisionEndpoints = decisionEndpoints,
                     autoDeskewAfterCapture = autoDeskewAfterCapture,
 
                     imageTokenizerMode = imageTokenizerMode,
@@ -142,6 +150,12 @@ class SettingsViewModel @Inject constructor(
                     activePromptPresetId = activePromptPresetId,
                     isSettingsLoaded = true
                 )
+            }
+        }
+
+        viewModelScope.launch {
+            endpointHealthTracker.healthStates.collect { states ->
+                _uiState.update { it.copy(endpointHealthStates = states) }
             }
         }
 
@@ -282,6 +296,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val ok = settingsRepository.saveEndpoint(endpoint, apiKey)
             if (ok) {
+                endpointHealthTracker.clear(endpoint.id)
                 refreshEndpointPool(endpoint.provider)
                 _uiEvent.emit(UiEvent.ShowLocalizedError(R.string.endpoint_save_success))
             } else {
@@ -300,6 +315,9 @@ class SettingsViewModel @Inject constructor(
             }
             val ok = settingsRepository.saveEndpoint(endpoint.copy(enabled = enabled), null)
             if (ok) {
+                if (enabled) {
+                    endpointHealthTracker.clear(endpointId)
+                }
                 refreshEndpointPool(provider)
             } else {
                 _uiEvent.emit(UiEvent.ShowLocalizedError(R.string.api_key_save_failed))
@@ -310,6 +328,7 @@ class SettingsViewModel @Inject constructor(
     fun deleteEndpoint(provider: String, endpointId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             if (settingsRepository.deleteEndpoint(provider, endpointId)) {
+                endpointHealthTracker.clear(endpointId)
                 refreshEndpointPool(provider)
                 _uiEvent.emit(UiEvent.ShowLocalizedError(R.string.endpoint_delete_success))
             }
@@ -328,6 +347,7 @@ class SettingsViewModel @Inject constructor(
                 providerEndpoints = state.providerEndpoints.toMutableMap().apply { put(provider, endpoints) },
                 providerUrls = state.providerUrls.toMutableMap().apply { put(provider, url) },
                 providerKeys = state.providerKeys.toMutableMap().apply { put(provider, key) },
+                decisionEndpoints = if (provider == DecisionConfig.PROVIDER_ID) endpoints else state.decisionEndpoints,
                 endpointHasKeys = state.endpointHasKeys.toMutableMap().apply { putAll(endpointHasKeys) }
             )
         }
@@ -763,9 +783,18 @@ class SettingsViewModel @Inject constructor(
 
     // Prompt Settings Accessors
     fun getCustomPrompt(promptKey: String): String = settingsRepository.getCustomPrompt(promptKey)
-    fun saveCustomPrompt(promptKey: String, prompt: String) = settingsRepository.saveCustomPrompt(promptKey, prompt)
-    fun resetCustomPrompt(promptKey: String) = settingsRepository.resetCustomPrompt(promptKey)
-    fun resetAllCustomPrompts() = settingsRepository.resetAllCustomPrompts()
+    fun saveCustomPrompt(promptKey: String, prompt: String) {
+        settingsRepository.saveCustomPrompt(promptKey, prompt)
+        _uiState.update { it.copy(promptPresets = settingsRepository.getPromptPresets()) }
+    }
+    fun resetCustomPrompt(promptKey: String) {
+        settingsRepository.resetCustomPrompt(promptKey)
+        _uiState.update { it.copy(promptPresets = settingsRepository.getPromptPresets()) }
+    }
+    fun resetAllCustomPrompts() {
+        settingsRepository.resetAllCustomPrompts()
+        _uiState.update { it.copy(promptPresets = settingsRepository.getPromptPresets()) }
+    }
 
     fun setActivePromptPreset(id: String) {
         settingsRepository.setActivePromptPresetId(id)
@@ -1005,6 +1034,16 @@ class SettingsViewModel @Inject constructor(
     fun setFailoverToNextEndpoint(value: Boolean) {
         settingsRepository.setFailoverToNextEndpoint(value)
         _uiState.update { it.copy(failoverToNextEndpoint = value) }
+    }
+
+    fun setDecisionApiEnabled(value: Boolean) {
+        settingsRepository.setDecisionApiEnabled(value)
+        _uiState.update { it.copy(decisionApiEnabled = value) }
+    }
+
+    fun setDecisionModel(model: String) {
+        settingsRepository.setDecisionModel(model)
+        _uiState.update { it.copy(decisionModel = settingsRepository.getDecisionModel()) }
     }
 
     fun toggleDeckSyncService(context: android.content.Context) {

@@ -191,14 +191,13 @@ class SettingsRepositoryImplTest {
             enabled = true
         )
         assertTrue(repository.saveEndpoint(endpoint, "secret"))
-        assertEquals(1, repository.buildLlmApiConfigs("Qwen", "qwen-test").size)
+        assertTrue(repository.getEndpoints("Qwen").first { it.id == "clear-key" }.enabled)
 
         assertTrue(repository.saveEndpoint(endpoint, ""))
 
         val saved = repository.getEndpoints("Qwen").first { it.id == "clear-key" }
         assertFalse(saved.enabled)
         assertEquals("", repository.getApiKeyForEndpoint("clear-key"))
-        assertTrue(repository.buildLlmApiConfigs("Qwen", "qwen-test").isEmpty())
     }
 
     @Test
@@ -317,39 +316,40 @@ class SettingsRepositoryImplTest {
     }
 
     @Test
-    fun buildLlmApiConfigsUsesEnabledEndpointWithKeyAndSkipsCooldownEndpoint() {
-        val repository = newRepository()
-        assertTrue(
-            repository.saveEndpoint(
-                LlmEndpoint(
-                    id = "ready",
-                    provider = "OpenAI Compatible",
-                    name = "Ready",
-                    baseUrl = "https://ready.example",
-                    priority = 1
-                ),
-                "ready-key"
-            )
-        )
-        assertTrue(
-            repository.saveEndpoint(
-                LlmEndpoint(
-                    id = "cooldown",
-                    provider = "OpenAI Compatible",
-                    name = "Cooldown",
-                    baseUrl = "https://cooldown.example",
-                    cooldownUntilMs = Long.MAX_VALUE
-                ),
-                "cooldown-key"
-            )
-        )
+    fun legacyEndpointJsonWithRuntimeCooldownFieldsDeserializesSafely() {
+        val standardPrefs = TestSharedPreferences()
+        val securePrefs = TestSharedPreferences()
+        val legacyJson = """
+            [
+              {
+                "id": "legacy-1",
+                "provider": "OpenAI Compatible",
+                "name": "Legacy",
+                "baseUrl": "https://legacy.example",
+                "enabled": true,
+                "priority": 1,
+                "weight": 2,
+                "cooldownUntilMs": 9999999999999,
+                "consecutiveFailures": 5,
+                "lastUsedAtMs": 123456789,
+                "lastError": "HTTP 429"
+              }
+            ]
+        """.trimIndent()
+        standardPrefs.edit().putString("llm_OpenAI Compatible_endpoints_json", legacyJson).apply()
+        securePrefs.edit().putString("llm_endpoint_legacy-1_key", "legacy-key").apply()
 
-        val configs = repository.buildLlmApiConfigs("OpenAI Compatible", "gpt-test")
+        val repository = newRepository(standardPrefs, securePrefs)
+        val endpoints = repository.getEndpoints("OpenAI Compatible")
 
-        assertEquals(1, configs.size)
-        assertEquals("ready", configs.single().endpointId)
-        assertEquals("https://ready.example", configs.single().url)
-        assertEquals("ready-key", configs.single().key)
+        assertEquals(1, endpoints.size)
+        val endpoint = endpoints.single()
+        assertEquals("legacy-1", endpoint.id)
+        assertEquals("Legacy", endpoint.name)
+        assertEquals("https://legacy.example", endpoint.baseUrl)
+        assertTrue(endpoint.enabled)
+        assertEquals(1, endpoint.priority)
+        assertEquals(2, endpoint.weight)
     }
 
     @Test

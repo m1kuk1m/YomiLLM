@@ -163,14 +163,11 @@ fun SegmentChip(
     )
     val baseBgColor = getChipColorForPos(segment)
     val hasDetails = !segment.meaning.isNullOrBlank() || !segment.role.isNullOrBlank()
-    val targetBgColor = if (isLoading) {
-        sumiInk.copy(alpha = shimmerAlpha)
-    } else if (isSelected) {
-        baseBgColor
-    } else if (hasDetails) {
-        baseBgColor
-    } else {
-        baseBgColor.copy(alpha = 0.35f)
+    val hasPosColor = !segment.posCategory.isNullOrBlank() && segment.posCategory != "OTHER"
+    val targetBgColor = when {
+        isLoading -> sumiInk.copy(alpha = shimmerAlpha)
+        isSelected || hasDetails || hasPosColor -> baseBgColor
+        else -> baseBgColor.copy(alpha = 0.35f)
     }
     
     val bgColor by animateColorAsState(

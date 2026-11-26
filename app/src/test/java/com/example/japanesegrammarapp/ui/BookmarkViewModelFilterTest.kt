@@ -287,10 +287,6 @@ class BookmarkViewModelFilterTest {
         override fun getApiKeyForEndpoint(endpointId: String): String = "key"
         override fun saveEndpoint(endpoint: LlmEndpoint, apiKey: String?): Boolean = true
         override fun deleteEndpoint(provider: String, endpointId: String): Boolean = true
-        override fun markEndpointSuccess(provider: String, endpointId: String) = Unit
-        override fun markEndpointFailure(provider: String, endpointId: String, error: String, cooldownMs: Long) = Unit
-        override fun touchEndpoint(provider: String, endpointId: String) = Unit
-        override fun buildLlmApiConfigs(provider: String, modelName: String): List<LlmApiConfig> = emptyList()
         override fun getActiveProvider(): String = "Gemini"
         override fun setActiveProvider(provider: String) = Unit
         override fun getActiveModel(provider: String): String = "gemini-test"
@@ -371,6 +367,11 @@ class BookmarkViewModelFilterTest {
         override fun getDeckSyncAuthToken(): String = ""
         override fun setDeckSyncAuthToken(token: String) = Unit
         override val deckSyncSettingsFlow = MutableStateFlow(com.example.japanesegrammarapp.domain.model.DeckSyncSettings())
+
+        override fun getDecisionApiEnabled(): Boolean = false
+        override fun setDecisionApiEnabled(value: Boolean) = Unit
+        override fun getDecisionModel(): String = com.example.japanesegrammarapp.domain.model.DecisionConfig.DEFAULT_MODEL
+        override fun setDecisionModel(model: String) = Unit
     }
 }
 

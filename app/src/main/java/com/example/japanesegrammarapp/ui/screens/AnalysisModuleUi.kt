@@ -27,6 +27,9 @@ fun AnalysisModule.displayNameRes(): Int = when (this) {
  */
 @Composable
 fun moduleDisplayName(apiTypeLabel: String): String {
+    if (apiTypeLabel == com.example.japanesegrammarapp.domain.model.DecisionConfig.API_TYPE_LABEL) {
+        return stringResource(com.example.japanesegrammarapp.R.string.module_decision_pos)
+    }
     val module = AnalysisModule.fromId(apiTypeLabel)
         ?: AnalysisModule.fromLegacyLabel(apiTypeLabel)
         ?: return apiTypeLabel
@@ -35,6 +38,9 @@ fun moduleDisplayName(apiTypeLabel: String): String {
 
 /** 非 Compose 文脈(エクスポート等)向けの Context ベース解決。 */
 fun moduleDisplayName(context: android.content.Context, apiTypeLabel: String): String {
+    if (apiTypeLabel == com.example.japanesegrammarapp.domain.model.DecisionConfig.API_TYPE_LABEL) {
+        return context.getString(com.example.japanesegrammarapp.R.string.module_decision_pos)
+    }
     val module = AnalysisModule.fromId(apiTypeLabel)
         ?: AnalysisModule.fromLegacyLabel(apiTypeLabel)
         ?: return apiTypeLabel

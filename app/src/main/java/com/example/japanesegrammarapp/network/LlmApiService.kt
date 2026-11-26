@@ -99,6 +99,37 @@ data class GeminiSafetyRating(
 data class GeminiModelListResponse(val models: List<GeminiModel>)
 data class GeminiModel(val name: String, val supportedGenerationMethods: List<String>? = null)
 
+// Gemini Decisions API Models (/v1beta/decisions)
+data class DecisionQuestionPayload(
+    val type: String,
+    val instructions: String,
+    val criteria: Map<String, String>? = null
+)
+
+data class DecisionRequest(
+    val model: String,
+    val input: String,
+    val questions: Map<String, DecisionQuestionPayload>
+)
+
+data class DecisionAnswerPayload(
+    val choice: String? = null,
+    val noul: Double? = null,
+    val confidence: Double? = null,
+    val probabilities: Map<String, Double>? = null
+)
+
+data class DecisionUsagePayload(
+    val totalTokens: Int? = null,
+    val promptTokens: Int? = null,
+    val candidatesTokens: Int? = null
+)
+
+data class DecisionResponse(
+    val answers: Map<String, DecisionAnswerPayload>? = null,
+    val usage: DecisionUsagePayload? = null
+)
+
 interface LlmApiService {
     // OpenAI-compatible: chat completions
     @POST
@@ -127,4 +158,11 @@ interface LlmApiService {
     suspend fun getGeminiModels(
         @Url url: String
     ): GeminiModelListResponse
+
+    // Gemini Decisions API: single-pass batch decision endpoint (uses ?key= URL parameter)
+    @POST
+    suspend fun executeDecisions(
+        @Url url: String,
+        @Body request: DecisionRequest
+    ): DecisionResponse
 }

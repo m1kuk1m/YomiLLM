@@ -27,10 +27,6 @@ interface SettingsRepository {
     fun getApiKeyForEndpoint(endpointId: String): String
     fun saveEndpoint(endpoint: LlmEndpoint, apiKey: String? = null): Boolean
     fun deleteEndpoint(provider: String, endpointId: String): Boolean
-    fun markEndpointSuccess(provider: String, endpointId: String)
-    fun markEndpointFailure(provider: String, endpointId: String, error: String, cooldownMs: Long)
-    fun touchEndpoint(provider: String, endpointId: String)
-    fun buildLlmApiConfigs(provider: String, modelName: String): List<LlmApiConfig>
 
     fun getActiveProvider(): String
     fun setActiveProvider(provider: String)
@@ -61,6 +57,12 @@ interface SettingsRepository {
     fun setAutoRetryOnError(value: Boolean)
     fun getFailoverToNextEndpoint(): Boolean
     fun setFailoverToNextEndpoint(value: Boolean)
+
+    // Decision Model API Settings
+    fun getDecisionApiEnabled(): Boolean
+    fun setDecisionApiEnabled(value: Boolean)
+    fun getDecisionModel(): String
+    fun setDecisionModel(model: String)
 
     fun getThemeMode(): String
     fun setThemeMode(mode: String)

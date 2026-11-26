@@ -574,6 +574,8 @@
     <string name="reset_prompt">デフォルトに戻す</string>
     <string name="reset_all_prompts">すべてデフォルトに戻す</string>
     <string name="prompt_select_type">タスクを選択</string>
+    <string name="prompt_status_default">組み込みデフォルト</string>
+    <string name="prompt_status_customized">カスタム済み</string>
 
     <string name="prompt_presets">プロンプトプリセット</string>
     <string name="preset_name">プリセット名</string>
@@ -805,5 +807,17 @@
     <string name="ocr_status_enabled">ローカルOCR オン</string>
     <string name="ocr_status_disabled">AI直接画像認識</string>
     <string name="advanced_summary_subtitle">APIデバッグ応答とアプリ動作ログ</string>
+    <string name="step_decision_pos">品詞判定・カラー分け</string>
+    <string name="module_decision_pos">判定モデル品詞分類</string>
+    <string name="module_segments_decoupled">詳細形態素解析（分離版）</string>
+    <string name="settings_llm_group_decision">判定モデル API（品詞高速分類）</string>
+    <string name="decision_api_enable">判定モデルによる品詞カラー分けを有効化</string>
+    <string name="decision_api_enable_desc">分かち書き後、独立した判定モデルで品詞を即座に分類・着色し、詳細解析と並列実行します。オフ時は従来通り動作します。</string>
+    <string name="decision_api_model">判定モデル名</string>
+    <string name="decision_api_model_hint">既定値：gemini-decision-1</string>
+    <string name="decision_api_save_model">適用</string>
+    <string name="decision_api_reset_model">既定に戻す</string>
+    <string name="decision_api_missing_endpoint_hint">判定モデルが有効ですが、有効なエンドポイントまたはAPIキーが未設定です。下から追加してください（未設定時はスキップされます）。</string>
+    <string name="decision_api_endpoint_note">既定URLは Google Decisions API で、メイン・予備・各モジュール用LLMプールとは完全に分離されています。</string>
 </resources>
 

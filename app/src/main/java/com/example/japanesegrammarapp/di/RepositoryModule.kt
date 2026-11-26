@@ -34,6 +34,18 @@ abstract class RepositoryModule {
 
     @Binds
     @Singleton
+    abstract fun bindEndpointHealthTracker(
+        inMemoryEndpointHealthTracker: InMemoryEndpointHealthTracker
+    ): EndpointHealthTracker
+
+    @Binds
+    @Singleton
+    abstract fun bindImageTextExtractor(
+        imageTextExtractorImpl: ImageTextExtractorImpl
+    ): ImageTextExtractor
+
+    @Binds
+    @Singleton
     abstract fun bindOcrRepository(
         ocrRepositoryImpl: OcrRepositoryImpl
     ): OcrRepository
@@ -49,6 +61,12 @@ abstract class RepositoryModule {
     abstract fun bindLlmRepository(
         llmRepositoryImpl: LlmRepositoryImpl
     ): LlmRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindDecisionRepository(
+        decisionRepositoryImpl: DecisionRepositoryImpl
+    ): DecisionRepository
 
     @Binds
     @Singleton

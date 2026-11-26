@@ -2,13 +2,8 @@ package com.example.japanesegrammarapp
 
 import android.os.Bundle
 import android.content.Intent
-import android.widget.Toast
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,10 +17,7 @@ import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.res.stringResource
-import com.example.japanesegrammarapp.domain.model.AnalysisStatus
 import com.example.japanesegrammarapp.domain.repository.SettingsRepository
-import com.example.japanesegrammarapp.domain.usecase.AnalyzeTextUseCase
-import com.example.japanesegrammarapp.domain.usecase.SaveAnalysisRecordUseCase
 import com.example.japanesegrammarapp.ui.AppNavigation
 import com.example.japanesegrammarapp.ui.SettingsViewModel
 import com.example.japanesegrammarapp.ui.theme.AppTheme
@@ -36,14 +28,12 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        const val EXTRA_EXTERNAL_ANALYSIS_TEXT = "extra_external_analysis_text"
+    }
+
     @Inject
     lateinit var settingsRepository: SettingsRepository
-
-    @Inject
-    lateinit var analyzeTextUseCase: AnalyzeTextUseCase
-
-    @Inject
-    lateinit var saveAnalysisRecordUseCase: SaveAnalysisRecordUseCase
 
     private val externalTextChannel = Channel<String>(Channel.BUFFERED)
     val externalTextFlow = externalTextChannel.receiveAsFlow()
@@ -69,11 +59,7 @@ class MainActivity : AppCompatActivity() {
     @androidx.compose.foundation.ExperimentalFoundationApi
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (handleIntent(intent)) {
-            finish()
-            overridePendingTransition(0, 0)
-            return
-        }
+        handleIntent(intent)
 
         // Request the highest available refresh rate (120Hz / 90Hz) on the next frame loop to avoid blocking onCreate startup
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
@@ -139,63 +125,26 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (handleIntent(intent)) {
-            finish()
-            overridePendingTransition(0, 0)
-        }
+        handleIntent(intent)
     }
 
-    private fun handleIntent(intent: Intent): Boolean {
-        val text = when (intent.action) {
-            Intent.ACTION_PROCESS_TEXT -> intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
-            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
-            else -> null
-        }
+    private fun handleIntent(intent: Intent) {
+        val text = intent.getStringExtra(EXTRA_EXTERNAL_ANALYSIS_TEXT)
+            ?: when (intent.action) {
+                Intent.ACTION_PROCESS_TEXT -> intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+                Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
+                else -> null
+            }
 
         if (!text.isNullOrBlank()) {
             val trimmedText = text.trim()
-            if (::settingsRepository.isInitialized && ::saveAnalysisRecordUseCase.isInitialized) {
-                val existingRecord = runBlocking(Dispatchers.IO) {
-                    saveAnalysisRecordUseCase.getByOriginalText(trimmedText)
-                }
-                val isAlreadyAnalyzed = existingRecord != null && existingRecord.status == AnalysisStatus.COMPLETED
-
-                if (!isAlreadyAnalyzed && settingsRepository.getSilentBackgroundMode()) {
-                    intent.action = null
-                    intent.removeExtra(Intent.EXTRA_PROCESS_TEXT)
-                    intent.removeExtra(Intent.EXTRA_TEXT)
-
-                    val provider = settingsRepository.getActiveProvider()
-                    val savedModel = settingsRepository.getActiveModel(provider)
-                    val model = if (savedModel.isNotBlank()) savedModel else {
-                        val models = settingsRepository.getModelsForProvider(provider)
-                        models.firstOrNull() ?: "default"
-                    }
-                    val key = settingsRepository.getApiKey(provider)
-                    val url = settingsRepository.getApiUrl(provider)
-
-                    CoroutineScope(Dispatchers.IO).launch {
-                        try {
-                            analyzeTextUseCase.execute(trimmedText, null, provider, model, url, key)
-                        } catch (e: Exception) {
-                            AppLogger.e("MAIN", "Silent background analysis failed to start", e)
-                        }
-                    }
-
-                    val displayText = if (trimmedText.length > 15) trimmedText.take(15) + "..." else trimmedText
-                    val toastMsg = getString(R.string.silent_analysis_queued_toast, displayText)
-                    Toast.makeText(applicationContext, toastMsg, Toast.LENGTH_SHORT).show()
-                    return true
-                }
-            }
-
             externalTextChannel.trySend(trimmedText)
             intent.action = null
+            intent.removeExtra(EXTRA_EXTERNAL_ANALYSIS_TEXT)
             intent.removeExtra(Intent.EXTRA_PROCESS_TEXT)
             intent.removeExtra(Intent.EXTRA_TEXT)
         }
 
         intentChannel.trySend(intent)
-        return false
     }
 }

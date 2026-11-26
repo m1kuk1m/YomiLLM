@@ -592,6 +592,8 @@
     <string name="reset_prompt">Reset Default</string>
     <string name="reset_all_prompts">Reset All Defaults</string>
     <string name="prompt_select_type">Select Task</string>
+    <string name="prompt_status_default">Built-in Default</string>
+    <string name="prompt_status_customized">Customized</string>
 
     <string name="prompt_presets">Prompt Presets</string>
     <string name="preset_name">Preset Name</string>
@@ -815,5 +817,17 @@
     <string name="ocr_status_enabled">Local OCR On</string>
     <string name="ocr_status_disabled">Direct AI Vision</string>
     <string name="advanced_summary_subtitle">API debug responses and developer logs</string>
+    <string name="step_decision_pos">POS Tagging (Decision Model)</string>
+    <string name="module_decision_pos">POS Coloring (Decision)</string>
+    <string name="module_segments_decoupled">Detailed Segmentation (Decoupled)</string>
+    <string name="settings_llm_group_decision">Decision Model API</string>
+    <string name="decision_api_enable">Enable Decision Model POS Tagging</string>
+    <string name="decision_api_enable_desc">Uses a standalone Gemini Decisions endpoint to classify and color token cards immediately in parallel with detailed analysis.</string>
+    <string name="decision_api_model">Decision Model Name</string>
+    <string name="decision_api_model_hint">Default: gemini-decision-1</string>
+    <string name="decision_api_save_model">Apply</string>
+    <string name="decision_api_reset_model">Default</string>
+    <string name="decision_api_missing_endpoint_hint">Decision API is enabled, but no active endpoint with an API key is configured. Add one below or analysis will skip decision coloring.</string>
+    <string name="decision_api_endpoint_note">Defaults to Google Decisions API (v1beta/decisions). Isolated from main, backup, and module LLMs.</string>
 </resources>
 

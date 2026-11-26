@@ -5,6 +5,8 @@ import com.example.japanesegrammarapp.domain.repository.*
 import com.example.japanesegrammarapp.domain.ApplicationScope
 import com.example.japanesegrammarapp.utils.TextCleaner
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 import kotlinx.coroutines.flow.StateFlow
 import java.util.concurrent.ConcurrentHashMap
@@ -16,6 +18,8 @@ data class AnalysisProgress(
     val imageOcrCompleted: Boolean = false,
     val tokenizerCompleted: Boolean = false,
     val segmentsCompleted: Boolean = false,
+    val decisionPosEnabled: Boolean = false,
+    val decisionPosCompleted: Boolean = false,
     val clausesCompleted: Boolean = false,
     val translationCompleted: Boolean = false,
     val grammarCompleted: Boolean = false,
@@ -44,7 +48,10 @@ interface AnalysisTaskManager {
 class DefaultAnalysisTaskManager @Inject constructor(
     private val saveAnalysisRecordUseCase: SaveAnalysisRecordUseCase,
     private val getOcrTextUseCase: GetOcrTextUseCase,
+    private val imageTextExtractor: ImageTextExtractor,
+    private val endpointPoolResolver: LlmEndpointPoolResolver,
     private val llmAnalysisService: LlmAnalysisService,
+    private val decisionRepository: DecisionRepository,
     private val detailedResultSerializer: DetailedResultSerializer,
     private val eventBus: AnalysisEventBus,
     private val settingsRepository: SettingsRepository,
@@ -72,7 +79,7 @@ class DefaultAnalysisTaskManager @Inject constructor(
         if (cleanText.isBlank() && imageUri.isNullOrBlank()) {
             throw IllegalArgumentException("Please enter text or capture an image.")
         }
-        val configuredPrimaryEndpoints = settingsRepository.buildLlmApiConfigs(provider, modelName)
+        val configuredPrimaryEndpoints = endpointPoolResolver.resolveConfigs(provider, modelName)
         val hasCompatibleLegacyKey = apiKey.isNotBlank()
         if (configuredPrimaryEndpoints.isEmpty() && !hasCompatibleLegacyKey) {
             throw IllegalArgumentException("Missing API Key.")
@@ -160,40 +167,41 @@ class DefaultAnalysisTaskManager @Inject constructor(
                 // Fetch LLM API configurations from the provider endpoint pools.
                 val primaryProvider = settingsRepository.getActiveProvider()
                 val primaryModel = settingsRepository.getActiveModel(primaryProvider)
-                val primaryConfigs = settingsRepository.buildLlmApiConfigs(primaryProvider, primaryModel)
+                val primaryConfigs = endpointPoolResolver.resolveConfigs(primaryProvider, primaryModel)
                 if (primaryConfigs.isEmpty()) {
                     throw IllegalArgumentException("Missing API Key.")
                 }
 
-                val backupProvider = settingsRepository.getBackupProvider()
-                val backupModel = settingsRepository.getBackupModel()
-                val backupConfigs = if (settingsRepository.getUseBackupApi() && backupProvider.isNotBlank() && backupModel.isNotBlank()) {
-                    settingsRepository.buildLlmApiConfigs(backupProvider, backupModel)
-                } else {
-                    emptyList()
-                }
+                val backupConfigs = endpointPoolResolver.resolveBackupConfigs()
 
                 // モジュール別モデル設定を解決する。オーバーライドが無効(キー未設定・全端点クールダウン中)
                 // ならグローバル設定へフォールバックし、解析自体は中断しない。予備APIは常にグローバル。
                 val stepPrimaryConfigs = AnalysisModule.entries.associateWith { module ->
-                    val override = settingsRepository.getComponentModelConfig(module.id)
-                    if (!override.isGlobal) {
-                        val overrideConfigs = settingsRepository.buildLlmApiConfigs(override.provider, override.model)
-                        if (overrideConfigs.isNotEmpty()) {
-                            return@associateWith overrideConfigs
+                    endpointPoolResolver.resolveModuleConfigs(
+                        module = module,
+                        fallbackProvider = primaryProvider,
+                        fallbackModel = primaryModel,
+                        onOverrideUnavailable = { overrideProvider, overrideModel ->
+                            appLogWriter.error(
+                                "LLM_API",
+                                "Module model override for [${module.id}] ($overrideProvider: $overrideModel) has no usable endpoint; falling back to global model"
+                            )
                         }
-                        appLogWriter.error(
-                            "LLM_API",
-                            "Module model override for [${module.id}] (${override.provider}: ${override.model}) has no usable endpoint; falling back to global model"
-                        )
-                    }
-                    primaryConfigs
+                    )
                 }
                 val translationConfigs = stepPrimaryConfigs.getValue(AnalysisModule.TRANSLATION)
                 val clausesConfigs = stepPrimaryConfigs.getValue(AnalysisModule.CLAUSES)
                 val grammarConfigs = stepPrimaryConfigs.getValue(AnalysisModule.GRAMMAR)
                 val segmentsConfigs = stepPrimaryConfigs.getValue(AnalysisModule.SEGMENTS)
                 val imageOcrConfigs = stepPrimaryConfigs.getValue(AnalysisModule.IMAGE_OCR)
+
+                val decisionConfigs = if (settingsRepository.getDecisionApiEnabled()) {
+                    val model = settingsRepository.getDecisionModel()
+                    endpointPoolResolver.resolveConfigs(DecisionConfig.PROVIDER_ID, model)
+                } else {
+                    emptyList()
+                }
+                progressStore.setDecisionPosEnabled(recordId, decisionConfigs.isNotEmpty())
 
                 // Perform OCR if needed
                 val isOcrEnabled = settingsRepository.getUseOcr()
@@ -418,41 +426,19 @@ class DefaultAnalysisTaskManager @Inject constructor(
                             }
                         }
 
-                        // Segments (detailed segmentation analysis)
-                        launch {
-                            try {
-                                llmAnalysisService.executeSegments(
-                                    text = effectiveText,
-                                    tokens = tokens,
-                                    imageBase64 = null,
-                                    mimeType = null,
-                                    primaryConfigs = segmentsConfigs,
-                                    backupConfigs = backupConfigs,
-                                    onRetry = getRetryListener(AnalysisStep.DETAILED_GRAMMAR),
-                                    onBackup = getBackupListener(AnalysisStep.DETAILED_GRAMMAR),
-                                    recordId = recordId,
-                                    stepName = AnalysisStep.DETAILED_GRAMMAR.name
-                                ).collect { res ->
-                                    val obj = res.first
-                                    val meta = res.second
-                                    obj?.segments?.let { progressStore.updatePartialSegments(recordId, it) }
-                                    partialResultStore.update { current ->
-                                    val nextSegments = obj?.segments ?: current.segments
-                                    current.copy(
-                                        segments = nextSegments,
-                                        consumedTokens = current.consumedTokens + meta.consumedTokens,
-                                        inputTokens = current.inputTokens + meta.inputTokens,
-                                        outputTokens = current.outputTokens + meta.outputTokens
-                                    )
-                                }
-                                }
-                            } catch (e: Exception) {
-                                logStepFailure(recordId, AnalysisStep.DETAILED_GRAMMAR, e)
-                                progressStore.markStepError(recordId, AnalysisStep.DETAILED_GRAMMAR.name, e.localizedMessage ?: "Unknown error")
-                            } finally {
-                                progressStore.markSegmentsCompleted(recordId)
-                            }
-                        }
+                        // Segments + optional parallel Decision POS classification
+                        launchSegmentsAndDecisionPos(
+                            scope = this,
+                            recordId = recordId,
+                            analysisText = effectiveText,
+                            tokens = tokens,
+                            segmentsConfigs = segmentsConfigs,
+                            backupConfigs = backupConfigs,
+                            decisionConfigs = decisionConfigs,
+                            partialResultStore = partialResultStore,
+                            getRetryListener = getRetryListener,
+                            getBackupListener = getBackupListener
+                        )
                     }
                 } else {
                     // ==========================================
@@ -463,7 +449,7 @@ class DefaultAnalysisTaskManager @Inject constructor(
                         progressStore.setImageTask(recordId, true)
                         var recognizedText: String? = null
                         try {
-                            llmAnalysisService.executeImageOcr(
+                            imageTextExtractor.extractTextWithVisionStreaming(
                                 imageBase64 = imageBase64,
                                 mimeType = mimeType,
                                 primaryConfigs = imageOcrConfigs,
@@ -473,9 +459,9 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                 recordId = recordId,
                                 stepName = AnalysisStep.IMAGE_OCR.name
                             ).collect { res ->
-                                val chunk = res.first
-                                val metadata = res.second
-                                if (!chunk.isNullOrBlank()) {
+                                val chunk = res.text
+                                val metadata = res.metadata
+                                if (chunk.isNotBlank()) {
                                     recognizedText = chunk
                                     val cur = saveAnalysisRecordUseCase.getById(recordId)
                                     if (cur != null) {
@@ -702,39 +688,19 @@ class DefaultAnalysisTaskManager @Inject constructor(
                                     progressStore.markTokenizerCompleted(recordId)
                                 }
 
-                                try {
-                                    // 4b. Execute detailed segments analysis using the retrieved tokens
-                                    llmAnalysisService.executeSegments(
-                                        text = analysisText,
-                                        tokens = tokens,
-                                        imageBase64 = null,
-                                        mimeType = null,
-                                        primaryConfigs = segmentsConfigs,
-                                        backupConfigs = backupConfigs,
-                                        onRetry = getRetryListener(AnalysisStep.DETAILED_GRAMMAR),
-                                        onBackup = getBackupListener(AnalysisStep.DETAILED_GRAMMAR),
-                                        recordId = recordId,
-                                        stepName = AnalysisStep.DETAILED_GRAMMAR.name
-                                    ).collect { resSeg ->
-                                        val segObj = resSeg.first
-                                        val segMeta = resSeg.second
-                                        segObj?.segments?.let { progressStore.updatePartialSegments(recordId, it) }
-                                        partialResultStore.update { current ->
-                                            val nextSegments = segObj?.segments ?: current.segments
-                                            current.copy(
-                                                segments = nextSegments,
-                                                consumedTokens = current.consumedTokens + segMeta.consumedTokens,
-                                                inputTokens = current.inputTokens + segMeta.inputTokens,
-                                                outputTokens = current.outputTokens + segMeta.outputTokens
-                                            )
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    logStepFailure(recordId, AnalysisStep.DETAILED_GRAMMAR, e)
-                                    progressStore.markStepError(recordId, AnalysisStep.DETAILED_GRAMMAR.name, e.localizedMessage ?: "Unknown error")
-                                } finally {
-                                    progressStore.markSegmentsCompleted(recordId)
-                                }
+                                // 4b. Execute detailed segments analysis (+ optional parallel Decision POS classification)
+                                launchSegmentsAndDecisionPos(
+                                    scope = this,
+                                    recordId = recordId,
+                                    analysisText = analysisText,
+                                    tokens = tokens,
+                                    segmentsConfigs = segmentsConfigs,
+                                    backupConfigs = backupConfigs,
+                                    decisionConfigs = decisionConfigs,
+                                    partialResultStore = partialResultStore,
+                                    getRetryListener = getRetryListener,
+                                    getBackupListener = getBackupListener
+                                )
                             }
                         }
                     }
@@ -788,6 +754,107 @@ class DefaultAnalysisTaskManager @Inject constructor(
                 }
             } finally {
                 progressStore.finish(recordId)
+            }
+        }
+    }
+
+    private fun launchSegmentsAndDecisionPos(
+        scope: CoroutineScope,
+        recordId: Int,
+        analysisText: String,
+        tokens: List<String>,
+        segmentsConfigs: List<LlmApiConfig>,
+        backupConfigs: List<LlmApiConfig>,
+        decisionConfigs: List<LlmApiConfig>,
+        partialResultStore: AnalysisPartialResultStore,
+        getRetryListener: (AnalysisStep) -> (Int) -> Unit,
+        getBackupListener: (AnalysisStep) -> (String) -> Unit
+    ) {
+        val useDecisionPos = decisionConfigs.isNotEmpty()
+        val mergeMutex = Mutex()
+        var decisionSegments: List<WordSegment>? = null
+
+        if (useDecisionPos) {
+            scope.launch {
+                try {
+                    val (classified, meta) = decisionRepository.classifyTokenPos(
+                        sentence = analysisText,
+                        tokens = tokens,
+                        configs = decisionConfigs,
+                        recordId = recordId,
+                        stepName = AnalysisStep.DECISION_POS.name
+                    )
+                    mergeMutex.withLock {
+                        decisionSegments = classified
+                        partialResultStore.update { current ->
+                            val baseSegments = current.segments ?: tokens.map { WordSegment(text = it) }
+                            val merged = SegmentMergeHelper.mergeDecisionPos(baseSegments, classified)
+                            progressStore.updatePartialSegments(recordId, merged)
+                            current.copy(
+                                segments = merged,
+                                consumedTokens = current.consumedTokens + meta.consumedTokens,
+                                inputTokens = current.inputTokens + meta.inputTokens,
+                                outputTokens = current.outputTokens + meta.outputTokens
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    logStepFailure(recordId, AnalysisStep.DECISION_POS, e)
+                    progressStore.markStepError(
+                        recordId,
+                        AnalysisStep.DECISION_POS.name,
+                        e.localizedMessage ?: "Decision POS classification failed"
+                    )
+                } finally {
+                    progressStore.markDecisionPosCompleted(recordId)
+                }
+            }
+        }
+
+        scope.launch {
+            try {
+                llmAnalysisService.executeSegments(
+                    text = analysisText,
+                    tokens = tokens,
+                    imageBase64 = null,
+                    mimeType = null,
+                    primaryConfigs = segmentsConfigs,
+                    backupConfigs = backupConfigs,
+                    onRetry = getRetryListener(AnalysisStep.DETAILED_GRAMMAR),
+                    onBackup = getBackupListener(AnalysisStep.DETAILED_GRAMMAR),
+                    recordId = recordId,
+                    stepName = AnalysisStep.DETAILED_GRAMMAR.name,
+                    decoupledPosMode = useDecisionPos
+                ).collect { resSeg ->
+                    val segObj = resSeg.first
+                    val segMeta = resSeg.second
+                    mergeMutex.withLock {
+                        val merged = segObj?.segments?.let { detailSegs ->
+                            SegmentMergeHelper.mergeDetailSegments(detailSegs, decisionSegments)
+                        }
+                        merged?.let { progressStore.updatePartialSegments(recordId, it) }
+                        partialResultStore.update { current ->
+                            val nextSegments = merged ?: current.segments
+                            current.copy(
+                                segments = nextSegments,
+                                consumedTokens = current.consumedTokens + segMeta.consumedTokens,
+                                inputTokens = current.inputTokens + segMeta.inputTokens,
+                                outputTokens = current.outputTokens + segMeta.outputTokens
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                logStepFailure(recordId, AnalysisStep.DETAILED_GRAMMAR, e)
+                progressStore.markStepError(
+                    recordId,
+                    AnalysisStep.DETAILED_GRAMMAR.name,
+                    e.localizedMessage ?: "Unknown error"
+                )
+            } finally {
+                progressStore.markSegmentsCompleted(recordId)
             }
         }
     }

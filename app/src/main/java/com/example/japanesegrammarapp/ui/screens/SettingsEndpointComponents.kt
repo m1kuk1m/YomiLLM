@@ -56,6 +56,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.japanesegrammarapp.R
+import com.example.japanesegrammarapp.domain.model.DecisionConfig
+import com.example.japanesegrammarapp.domain.model.EndpointHealthState
 import com.example.japanesegrammarapp.domain.model.EndpointUrlValidator
 import com.example.japanesegrammarapp.domain.model.LlmEndpoint
 
@@ -64,12 +66,13 @@ import com.example.japanesegrammarapp.domain.model.LlmEndpoint
 fun EndpointPoolSection(
     endpoints: List<LlmEndpoint>,
     endpointHasKeys: Map<String, Boolean>,
+    endpointHealthStates: Map<String, EndpointHealthState> = emptyMap(),
     fetchingEndpointId: String?,
     onAddEndpoint: () -> Unit,
     onEditEndpoint: (LlmEndpoint) -> Unit,
     onDeleteEndpoint: (LlmEndpoint) -> Unit,
     onToggleEndpoint: (LlmEndpoint, Boolean) -> Unit,
-    onFetchModels: (LlmEndpoint) -> Unit,
+    onFetchModels: ((LlmEndpoint) -> Unit)?,
     onFetchModelsForProvider: (() -> Unit)? = null,
     isFetchingProvider: Boolean = false,
     isFetchingAnyModel: Boolean = false
@@ -149,7 +152,8 @@ fun EndpointPoolSection(
         Spacer(modifier = Modifier.height(8.dp))
 
         endpoints.forEach { endpoint ->
-            val isCoolingDown = endpoint.cooldownUntilMs > now
+            val health = endpointHealthStates[endpoint.id] ?: EndpointHealthState.HEALTHY
+            val isCoolingDown = health.isCoolingDown(now)
             val isFetching = fetchingEndpointId == endpoint.id
             val hasApiKey = endpointHasKeys[endpoint.id] == true
             val hasValidUrl = EndpointUrlValidator.isValidHttpUrl(endpoint.baseUrl)
@@ -231,9 +235,9 @@ fun EndpointPoolSection(
                             color = sumiInk.copy(alpha = 0.5f),
                             fontSize = 11.sp
                         )
-                        if (endpoint.consecutiveFailures > 0) {
+                        if (health.consecutiveFailures > 0) {
                             Text(
-                                text = stringResource(R.string.endpoint_failures, endpoint.consecutiveFailures),
+                                text = stringResource(R.string.endpoint_failures, health.consecutiveFailures),
                                 color = Color(0xFFC62828),
                                 fontSize = 11.sp
                             )
@@ -242,13 +246,13 @@ fun EndpointPoolSection(
                             Text(
                                 text = stringResource(
                                     R.string.endpoint_cooldown,
-                                    formatEndpointDuration(endpoint.cooldownUntilMs - now)
+                                    formatEndpointDuration(health.cooldownUntilMs - now)
                                 ),
                                 color = Color(0xFFE65100),
                                 fontSize = 11.sp
                             )
                         }
-                        endpoint.lastError?.takeIf { it.isNotBlank() }?.let { error ->
+                        health.lastError?.takeIf { it.isNotBlank() }?.let { error ->
                             Text(
                                 text = stringResource(R.string.endpoint_last_error, error),
                                 color = sumiInk.copy(alpha = 0.55f),
@@ -260,18 +264,20 @@ fun EndpointPoolSection(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = { onFetchModels(endpoint) },
-                            enabled = canFetchModels
-                        ) {
-                            if (isFetching) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = primaryColor,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.fetch_models))
+                        if (onFetchModels != null) {
+                            IconButton(
+                                onClick = { onFetchModels(endpoint) },
+                                enabled = canFetchModels
+                            ) {
+                                if (isFetching) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        color = primaryColor,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.fetch_models))
+                                }
                             }
                         }
                         IconButton(onClick = { onEditEndpoint(endpoint) }) {
@@ -314,7 +320,14 @@ fun EndpointEditorDialog(
     onSave: (name: String, baseUrl: String, apiKey: String, priority: Int, weight: Int) -> Unit
 ) {
     var name by remember(endpoint?.id) { mutableStateOf(endpoint?.name ?: "") }
-    var baseUrl by remember(endpoint?.id) { mutableStateOf(endpoint?.baseUrl ?: "") }
+    var baseUrl by remember(endpoint?.id, provider) {
+        val defaultPrefill = if (endpoint == null && provider == DecisionConfig.PROVIDER_ID) {
+            DecisionConfig.DEFAULT_URL
+        } else {
+            ""
+        }
+        mutableStateOf(endpoint?.baseUrl ?: defaultPrefill)
+    }
     var apiKey by remember(endpoint?.id, initialKey) { mutableStateOf(initialKey) }
     var priorityText by remember(endpoint?.id) { mutableStateOf((endpoint?.priority ?: 0).toString()) }
     var weightText by remember(endpoint?.id) { mutableStateOf((endpoint?.weight ?: 1).toString()) }

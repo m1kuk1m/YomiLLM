@@ -2,13 +2,8 @@ package com.example.japanesegrammarapp.domain.usecase
 
 import android.net.Uri
 import com.example.japanesegrammarapp.domain.ApplicationScope
-import com.example.japanesegrammarapp.domain.model.AnalysisModule
-import com.example.japanesegrammarapp.domain.repository.ImageAttachmentLoader
-import com.example.japanesegrammarapp.domain.repository.LlmAnalysisService
-import com.example.japanesegrammarapp.domain.repository.OcrRepository
-import com.example.japanesegrammarapp.domain.repository.SettingsRepository
+import com.example.japanesegrammarapp.domain.repository.ImageTextExtractor
 import com.example.japanesegrammarapp.utils.AppLogger
-import com.example.japanesegrammarapp.utils.TextCleaner
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,10 +30,7 @@ private data class QueuedPhotoTask(
 
 @Singleton
 class PhotoInputQueueManager @Inject constructor(
-    private val imageAttachmentLoader: ImageAttachmentLoader,
-    private val llmAnalysisService: LlmAnalysisService,
-    private val ocrRepository: OcrRepository,
-    private val settingsRepository: SettingsRepository,
+    private val imageTextExtractor: ImageTextExtractor,
     @ApplicationScope private val externalScope: CoroutineScope
 ) {
     private val _status = MutableStateFlow(PhotoInputUiStatus())
@@ -198,80 +190,10 @@ class PhotoInputQueueManager @Inject constructor(
     }
 
     private suspend fun recognizeImage(uri: Uri): String {
-        val uriString = uri.toString()
-        val payload = try {
-            imageAttachmentLoader.loadAsBase64(uriString)
-        } catch (e: Exception) {
-            AppLogger.e("PHOTO_INPUT", "Failed to load base64 from $uri", e)
-            null
-        }
-
-        if (payload != null && payload.base64Data.isNotBlank()) {
-            val override = settingsRepository.getComponentModelConfig(AnalysisModule.IMAGE_OCR.id)
-            val primaryConfigs = if (!override.isGlobal) {
-                val overrideConfigs = settingsRepository.buildLlmApiConfigs(override.provider, override.model)
-                if (overrideConfigs.isNotEmpty()) overrideConfigs else {
-                    val primaryProvider = settingsRepository.getActiveProvider()
-                    val primaryModel = settingsRepository.getActiveModel(primaryProvider)
-                    settingsRepository.buildLlmApiConfigs(primaryProvider, primaryModel)
-                }
-            } else {
-                val primaryProvider = settingsRepository.getActiveProvider()
-                val primaryModel = settingsRepository.getActiveModel(primaryProvider)
-                settingsRepository.buildLlmApiConfigs(primaryProvider, primaryModel)
-            }
-
-            val backupProvider = settingsRepository.getBackupProvider()
-            val backupModel = settingsRepository.getBackupModel()
-            val backupConfigs = if (settingsRepository.getUseBackupApi() && backupProvider.isNotBlank() && backupModel.isNotBlank()) {
-                settingsRepository.buildLlmApiConfigs(backupProvider, backupModel)
-            } else {
-                emptyList()
-            }
-
-            if (primaryConfigs.isNotEmpty()) {
-                try {
-                    var recognized: String? = null
-                    llmAnalysisService.executeImageOcr(
-                        imageBase64 = payload.base64Data,
-                        mimeType = payload.mimeType,
-                        primaryConfigs = primaryConfigs,
-                        backupConfigs = backupConfigs,
-                        onRetry = {},
-                        onBackup = {},
-                        recordId = null,
-                        stepName = "PHOTO_INPUT_OCR"
-                    ).collect { pair ->
-                        val text = pair.first
-                        if (!text.isNullOrBlank()) {
-                            recognized = text
-                        }
-                    }
-
-                    var clean = recognized?.trim().orEmpty()
-                    if (clean.isNotBlank()) {
-                        if (settingsRepository.getRemoveAccidentalSpaces()) {
-                            clean = TextCleaner.removeAccidentalSpaces(clean)
-                        }
-                        return clean
-                    }
-                } catch (e: Exception) {
-                    AppLogger.e("PHOTO_INPUT", "LLM OCR failed, fallback to local OCR", e)
-                }
-            }
-        }
-
-        // Fallback to local ML Kit OCR
-        return try {
-            var local = ocrRepository.extractTextFromImage(uri.toString()).trim()
-            if (settingsRepository.getRemoveAccidentalSpaces()) {
-                local = TextCleaner.removeAccidentalSpaces(local)
-            }
-            local
-        } catch (e: Exception) {
-            AppLogger.e("PHOTO_INPUT", "Local OCR also failed", e)
-            ""
-        }
+        return imageTextExtractor.extractTextPreferVisionWithLocalFallback(
+            imageUri = uri.toString(),
+            stepName = "PHOTO_INPUT_OCR"
+        )
     }
 
     private fun cleanupTempFile(uri: Uri) {

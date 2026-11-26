@@ -7,6 +7,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import com.example.japanesegrammarapp.network.*
 import com.example.japanesegrammarapp.domain.model.LlmConfig
 import com.example.japanesegrammarapp.domain.model.ReasoningLevel
+import com.example.japanesegrammarapp.domain.repository.EndpointHealthTracker
 import com.example.japanesegrammarapp.domain.repository.LlmRepository
 import com.example.japanesegrammarapp.domain.repository.LlmResult
 import com.example.japanesegrammarapp.domain.repository.LlmApiConfig
@@ -20,6 +21,7 @@ import kotlinx.coroutines.channels.awaitClose
 class LlmRepositoryImpl @Inject constructor(
     private val llmService: LlmApiService,
     private val settingsRepository: SettingsRepository,
+    private val endpointHealthTracker: EndpointHealthTracker,
     private val okHttpClient: okhttp3.OkHttpClient,
     private val gson: com.google.gson.Gson
 ) : LlmRepository {
@@ -93,15 +95,7 @@ class LlmRepositoryImpl @Inject constructor(
                 }
 
                 val reasoningLevel = settingsRepository.getEffectiveReasoningLevel(apiTypeLabel)
-                val isO1OrO3 = modelName.contains("o1", ignoreCase = true) || modelName.contains("o3", ignoreCase = true)
-                val reasoningEffort = if (isO1OrO3) {
-                    when (reasoningLevel) {
-                        ReasoningLevel.LOW -> "low"
-                        ReasoningLevel.MEDIUM -> "medium"
-                        ReasoningLevel.HIGH -> "high"
-                        else -> null
-                    }
-                } else null
+                val reasoningEffort = LlmConfig.resolveOpenAiReasoningEffort(modelName, reasoningLevel)
 
                 val request = OpenAiRequest(
                     model = modelName,
@@ -109,7 +103,7 @@ class LlmRepositoryImpl @Inject constructor(
                         OpenAiMessage(role = "system", content = systemPrompt),
                         OpenAiMessage(role = "user", content = userContent)
                     ),
-                    temperature = if (isO1OrO3) null else 0.1,
+                    temperature = LlmConfig.resolveOpenAiTemperature(modelName),
                     reasoning_effort = reasoningEffort
                 )
                 val response = llmService.generateOpenAiCompatible(url, "Bearer ${apiKey.trim()}", request)
@@ -157,49 +151,15 @@ class LlmRepositoryImpl @Inject constructor(
                 )
 
                 val reasoningLevel = settingsRepository.getEffectiveReasoningLevel(apiTypeLabel)
-                val thinkingConfig = if (!LlmConfig.isGeminiReasoningModel(modelName)) {
-                    null
-                } else {
-                    when (reasoningLevel) {
-                        ReasoningLevel.AUTO -> null
-                        ReasoningLevel.OFF -> {
-                            if (LlmConfig.isGemini3Model(modelName)) {
-                                GeminiThinkingConfig(thinkingLevel = "MINIMAL", includeThoughts = false)
-                            } else {
-                                GeminiThinkingConfig(thinkingBudget = 0, includeThoughts = false)
-                            }
-                        }
-                        ReasoningLevel.LOW -> {
-                            if (LlmConfig.isGemini3Model(modelName)) {
-                                GeminiThinkingConfig(thinkingLevel = "LOW", includeThoughts = true)
-                            } else {
-                                GeminiThinkingConfig(thinkingBudget = 1024, includeThoughts = true)
-                            }
-                        }
-                        ReasoningLevel.MEDIUM -> {
-                            if (LlmConfig.isGemini3Model(modelName)) {
-                                GeminiThinkingConfig(thinkingLevel = "MEDIUM", includeThoughts = true)
-                            } else {
-                                GeminiThinkingConfig(thinkingBudget = 4096, includeThoughts = true)
-                            }
-                        }
-                        ReasoningLevel.HIGH -> {
-                            if (LlmConfig.isGemini3Model(modelName)) {
-                                GeminiThinkingConfig(thinkingLevel = "HIGH", includeThoughts = true)
-                            } else {
-                                GeminiThinkingConfig(thinkingBudget = 8192, includeThoughts = true)
-                            }
-                        }
-                    }
-                }
+                val thinkingConfig = buildGeminiThinkingConfig(modelName, reasoningLevel)
 
                 val request = GeminiRequest(
                     contents = listOf(GeminiContent(role = "user", parts = parts)),
                     systemInstruction = GeminiSystemInstruction(parts = listOf(GeminiPart(text = systemPrompt))),
                     generationConfig = GeminiGenerationConfig(
-                        // Gemini 3.x は temperature をデフォルト(1.0)のままにすることが公式推奨
-                        // (低温設定は推論劣化・ループの原因になる)
-                        temperature = if (LlmConfig.isGemini3Model(modelName)) null else 0.1,
+                        // Gemini 3.x / 4.x+ は temperature をデフォルトのままにすることが公式推奨
+                        // (低温設定は推論劣化・ループの原因になり、3.6+/4 では非推奨・将来エラー化)
+                        temperature = LlmConfig.resolveGeminiTemperature(modelName),
                         thinkingConfig = thinkingConfig
                     ),
                     safetySettings = safetySettings
@@ -251,6 +211,37 @@ class LlmRepositoryImpl @Inject constructor(
                 LlmResult(text, tokens, inputTokens, outputTokens, provider, modelName, reasoningText = finalReasoningText, reasoningTokens = reasoningTokens)
             }
             else -> throw Exception("Unsupported provider")
+        }
+    }
+
+    private fun buildGeminiThinkingConfig(
+        modelName: String,
+        reasoningLevel: ReasoningLevel
+    ): GeminiThinkingConfig? {
+        if (!LlmConfig.isGeminiReasoningModel(modelName)) return null
+        val useThinkingLevel = LlmConfig.isGemini3OrLater(modelName)
+        return when (reasoningLevel) {
+            ReasoningLevel.AUTO -> null
+            ReasoningLevel.OFF -> if (useThinkingLevel) {
+                GeminiThinkingConfig(thinkingLevel = "MINIMAL", includeThoughts = false)
+            } else {
+                GeminiThinkingConfig(thinkingBudget = 0, includeThoughts = false)
+            }
+            ReasoningLevel.LOW -> if (useThinkingLevel) {
+                GeminiThinkingConfig(thinkingLevel = "LOW", includeThoughts = true)
+            } else {
+                GeminiThinkingConfig(thinkingBudget = 1024, includeThoughts = true)
+            }
+            ReasoningLevel.MEDIUM -> if (useThinkingLevel) {
+                GeminiThinkingConfig(thinkingLevel = "MEDIUM", includeThoughts = true)
+            } else {
+                GeminiThinkingConfig(thinkingBudget = 4096, includeThoughts = true)
+            }
+            ReasoningLevel.HIGH -> if (useThinkingLevel) {
+                GeminiThinkingConfig(thinkingLevel = "HIGH", includeThoughts = true)
+            } else {
+                GeminiThinkingConfig(thinkingBudget = 8192, includeThoughts = true)
+            }
         }
     }
 
@@ -626,7 +617,7 @@ class LlmRepositoryImpl @Inject constructor(
             }
             try {
                 if (config.endpointId.isNotBlank()) {
-                    settingsRepository.touchEndpoint(config.provider, config.endpointId)
+                    endpointHealthTracker.touch(config.endpointId)
                 }
                 AppLogger.apiEvent(
                     apiTypeLabel = apiTypeLabel,
@@ -655,7 +646,7 @@ class LlmRepositoryImpl @Inject constructor(
                     apiTypeLabel = apiTypeLabel
                 )
                 if (config.endpointId.isNotBlank()) {
-                    settingsRepository.markEndpointSuccess(config.provider, config.endpointId)
+                    endpointHealthTracker.markSuccess(config.endpointId)
                 }
                 return PoolAttempt(
                     result.copy(
@@ -669,8 +660,7 @@ class LlmRepositoryImpl @Inject constructor(
                 val elapsedMs = System.currentTimeMillis() - attemptStartMs
                 lastException = e
                 if (config.endpointId.isNotBlank()) {
-                    settingsRepository.markEndpointFailure(
-                        provider = config.provider,
+                    endpointHealthTracker.markFailure(
                         endpointId = config.endpointId,
                         error = e.localizedMessage ?: "Unknown error",
                         cooldownMs = endpointCooldownMs(e)
@@ -792,7 +782,7 @@ class LlmRepositoryImpl @Inject constructor(
                 )
                 
                 if (config.endpointId.isNotBlank()) {
-                    settingsRepository.touchEndpoint(config.provider, config.endpointId)
+                    endpointHealthTracker.touch(config.endpointId)
                 }
 
                 val streamFlow = kotlinx.coroutines.flow.callbackFlow {
@@ -816,15 +806,7 @@ class LlmRepositoryImpl @Inject constructor(
                             }
                             
                             val reasoningLevel = settingsRepository.getEffectiveReasoningLevel(apiTypeLabel)
-                            val isO1OrO3 = config.modelName.contains("o1", ignoreCase = true) || config.modelName.contains("o3", ignoreCase = true)
-                            val reasoningEffort = if (isO1OrO3) {
-                                when (reasoningLevel) {
-                                    ReasoningLevel.LOW -> "low"
-                                    ReasoningLevel.MEDIUM -> "medium"
-                                    ReasoningLevel.HIGH -> "high"
-                                    else -> null
-                                }
-                            } else null
+                            val reasoningEffort = LlmConfig.resolveOpenAiReasoningEffort(config.modelName, reasoningLevel)
 
                             val request = OpenAiRequest(
                                 model = config.modelName,
@@ -832,7 +814,7 @@ class LlmRepositoryImpl @Inject constructor(
                                     OpenAiMessage(role = "system", content = systemPrompt),
                                     OpenAiMessage(role = "user", content = userContent)
                                 ),
-                                temperature = if (isO1OrO3) null else 0.1,
+                                temperature = LlmConfig.resolveOpenAiTemperature(config.modelName),
                                 stream = true,
                                 stream_options = mapOf("include_usage" to true),
                                 reasoning_effort = reasoningEffort
@@ -857,48 +839,14 @@ class LlmRepositoryImpl @Inject constructor(
                             )
 
                             val reasoningLevel = settingsRepository.getEffectiveReasoningLevel(apiTypeLabel)
-                            val thinkingConfig = if (!LlmConfig.isGeminiReasoningModel(config.modelName)) {
-                                null
-                            } else {
-                                when (reasoningLevel) {
-                                    ReasoningLevel.AUTO -> null
-                                    ReasoningLevel.OFF -> {
-                                        if (LlmConfig.isGemini3Model(config.modelName)) {
-                                            GeminiThinkingConfig(thinkingLevel = "MINIMAL", includeThoughts = false)
-                                        } else {
-                                            GeminiThinkingConfig(thinkingBudget = 0, includeThoughts = false)
-                                        }
-                                    }
-                                    ReasoningLevel.LOW -> {
-                                        if (LlmConfig.isGemini3Model(config.modelName)) {
-                                            GeminiThinkingConfig(thinkingLevel = "LOW", includeThoughts = true)
-                                        } else {
-                                            GeminiThinkingConfig(thinkingBudget = 1024, includeThoughts = true)
-                                        }
-                                    }
-                                    ReasoningLevel.MEDIUM -> {
-                                        if (LlmConfig.isGemini3Model(config.modelName)) {
-                                            GeminiThinkingConfig(thinkingLevel = "MEDIUM", includeThoughts = true)
-                                        } else {
-                                            GeminiThinkingConfig(thinkingBudget = 4096, includeThoughts = true)
-                                        }
-                                    }
-                                    ReasoningLevel.HIGH -> {
-                                        if (LlmConfig.isGemini3Model(config.modelName)) {
-                                            GeminiThinkingConfig(thinkingLevel = "HIGH", includeThoughts = true)
-                                        } else {
-                                            GeminiThinkingConfig(thinkingBudget = 8192, includeThoughts = true)
-                                        }
-                                    }
-                                }
-                            }
+                            val thinkingConfig = buildGeminiThinkingConfig(config.modelName, reasoningLevel)
 
                             val request = GeminiRequest(
                                 contents = listOf(GeminiContent(role = "user", parts = parts)),
                                 systemInstruction = GeminiSystemInstruction(parts = listOf(GeminiPart(text = systemPrompt))),
                                 generationConfig = GeminiGenerationConfig(
-                                    // Gemini 3.x は temperature をデフォルト(1.0)のままにすることが公式推奨
-                                    temperature = if (LlmConfig.isGemini3Model(config.modelName)) null else 0.1,
+                                    // Gemini 3.x / 4.x+ は temperature をデフォルトのままにすることが公式推奨
+                                    temperature = LlmConfig.resolveGeminiTemperature(config.modelName),
                                     thinkingConfig = thinkingConfig
                                 ),
                                 safetySettings = safetySettings
@@ -1021,7 +969,7 @@ class LlmRepositoryImpl @Inject constructor(
                 }
 
                 if (config.endpointId.isNotBlank()) {
-                    settingsRepository.markEndpointSuccess(config.provider, config.endpointId)
+                    endpointHealthTracker.markSuccess(config.endpointId)
                 }
                 return@flow 
             } catch (e: Exception) {
@@ -1029,8 +977,7 @@ class LlmRepositoryImpl @Inject constructor(
                 val elapsedMs = System.currentTimeMillis() - attemptStartMs
                 lastException = e
                 if (config.endpointId.isNotBlank()) {
-                    settingsRepository.markEndpointFailure(
-                        provider = config.provider,
+                    endpointHealthTracker.markFailure(
                         endpointId = config.endpointId,
                         error = e.localizedMessage ?: "Unknown error",
                         cooldownMs = endpointCooldownMs(e)
